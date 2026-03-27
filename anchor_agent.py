@@ -340,25 +340,29 @@ if __name__ == "__main__":
             
             # Only process when window CHANGES
             if title != last_title:
-                result = classify_window(context, title)
                 
-                # ALWAYS save to history (agent needs this later)
-                add_observation(f"Window: {title} --> {result['verdict']}")
+                # Classify the new window
+                result = classify_window(context, title, expected)
+                verdict = result["verdict"]
+                confidence = result.get("confidence", 0)
+                reason = result.get("reason", "")
+                cached = result.get("from_cache", False)
+                latency = result.get("latency_ms", 0)
                 
-                if result["verdict"] == "relevant":
-                    # Just save, don't call agent
-                    # The history is building up silently
-                    print(f"✅ RELEVANT - agent not called, saving to history")
+                # Update session state
+                if verdict == "drift":
+                    session_state["drift_count"] += 1
+                elif verdict == "relevant":
+                    session_state["ever_on_task"] = True
                 
-                elif result["verdict"] == "drift":
-                    # NOW call the agent with full history
-                    decision = anchor_agent_decide(event_summary)
-                    # Agent reads all the "relevant" events too
-                    # and makes a smart decision
-                
-                elif result["verdict"] == "unsure":
-                    # Call agent to decide whether to ask user
-                    decision = anchor_agent_decide(event_summary)
+                # Track time on relevant windows (for long-stay detection)
+                if verdict == "relevant":
+                    if title != last_relevant_window:
+                        relevant_window_start = time.time()
+                        last_relevant_window = title
+                else:
+                    relevant_window_start = None
+                    last_relevant_window = ""
                 
                 # Show classification
                 icon = "✅" if verdict == "relevant" else "🚨" if verdict == "drift" else "🟡"
