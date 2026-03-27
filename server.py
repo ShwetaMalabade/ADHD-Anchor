@@ -16,13 +16,13 @@ import json
 import time
 import asyncio
 import subprocess
+import threading
 from datetime import datetime
 from collections import Counter
 from typing import Optional
 from elevenlabs.client import ElevenLabs
 from elevenlabs.play import play
-
-
+from pynput import mouse, keyboard as kb
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -32,6 +32,20 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ============================================================
+# ACTIVITY TRACKING (keyboard + mouse via pynput)
+# ============================================================
+last_activity_time = time.time()
+
+def on_activity(*args):
+    global last_activity_time
+    last_activity_time = time.time()
+
+# Start listeners in background threads (run forever, non-blocking)
+mouse.Listener(on_move=on_activity, on_click=on_activity, on_scroll=on_activity).start()
+kb.Listener(on_press=on_activity).start()
+print("[PYNPUT] Keyboard and mouse listeners started.")
+
+# ============================================================
 # INITIALIZE
 # ============================================================
 app = FastAPI(title="Anchor Backend")
@@ -39,7 +53,7 @@ app = FastAPI(title="Anchor Backend")
 # Allow React frontend (localhost:3000) to talk to this server
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, restrict this
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -47,7 +61,6 @@ app.add_middleware(
 
 # Gemini client
 gemini_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-
 
 # Connected WebSocket clients (React frontends)
 connected_clients: list[WebSocket] = []
@@ -57,13 +70,13 @@ connected_clients: list[WebSocket] = []
 # ============================================================
 class SessionStartRequest(BaseModel):
     task: str
-    duration: int = 60          # minutes
+    duration: int = 60
     dnd: bool = False
     expected_notifications: str = ""
-    session_type: str = "solid"  # quick_sprint, solid, deep_dive, just_start
+    session_type: str = "solid"
 
 class UserResponse(BaseModel):
-    action: str  # "pull_me_back", "taking_break", "im_ready", "got_it"
+    action: str
 
 # ============================================================
 # SESSION STATE
@@ -72,7 +85,7 @@ session_active = False
 session_state = {}
 observation_history = []
 classification_cache = {}
-monitoring_task = None  # asyncio background task
+monitoring_task = None
 
 
 # ============================================================
@@ -95,7 +108,6 @@ def get_active_window_title() -> str:
         if result.returncode == 0:
             return result.stdout.strip()
         else:
-            # Some apps don't have window titles, just return app name
             fallback = '''
             tell application "System Events"
                 return name of first application process whose frontmost is true
@@ -123,7 +135,7 @@ Analyze this task and return a JSON object with:
 - "likely_tools": list of apps and tools they might legitimately use
 - "likely_sites": list of websites they might legitimately visit
 - "activity_type": one of "reading", "writing", "coding", "browsing", "mixed"
-- "always_ok": apps that are always fine regardless of task (music players, calculator, etc.)
+- "always_ok": apps that are always fine regardless of task (music players, calculator, etc.). NEVER include messaging apps like WhatsApp, Slack, iMessage, Telegram in always_ok.
 
 Return ONLY valid JSON. No markdown, no backticks."""
 
@@ -148,7 +160,6 @@ def classify_window(task_context: dict, window_title: str, expected_notification
         cached["from_cache"] = True
         return cached
 
-    # Check always-ok apps
     for app_name in task_context.get("always_ok", []):
         if app_name.lower() in window_title.lower():
             result = {"verdict": "relevant", "confidence": 0.99, "reason": f"{app_name} is always allowed"}
@@ -272,16 +283,22 @@ Think through:
 RULES:
 - If user is FOCUSED and on a task-relevant app, STAY SILENT. Never interrupt good focus.
 - FIRST drift of the ENTIRE session: stay silent, give them a chance to self-correct.
-- SECOND drift: speak with a gentle nudge like "Hey, you left your [task] for [app]. Break or get back?"
-- THIRD or more drift: you MUST intervene, even if they self-corrected previous times. Say something like "You keep bouncing away. Something blocking you, or do you need a real break?"
+- SECOND drift: speak with a gentle nudge.
+- THIRD or more drift: you MUST intervene, even if they self-corrected previous times.
 - If they've been on a "relevant" app (Claude/ChatGPT/YouTube) for 15+ minutes, gently check in.
 - If 3+ minutes passed and they never opened a task-relevant app, that's task initiation paralysis. Help them start.
 - If focused 40+ minutes without break, proactively suggest a break.
-- If the drift app matches their expected notification source, be extra gentle: "Looks like [app] pulled you out. Take a minute, I'll remind you to come back."
+- If the drift app matches their expected notification source, be extra gentle.
 - If the classifier returned "unsure", ASK the user: "Are you using [app] for your task or did you drift?"
 - NEVER be accusatory. You're a supportive friend, not a monitor.
 - Keep messages to 1-2 sentences MAX.
 - DO NOT keep staying silent on repeated drifts. If drift_count >= 2, you MUST speak or ask.
+- CRITICAL: ONLY reference apps and windows that appear in the session history above. NEVER mention apps the user has not visited. Read the LATEST EVENT carefully and use the ACTUAL app name from it in your message. If the latest event says "VS Code", say "VS Code" not "WhatsApp" or "Reddit" or any other app.
+- If ever_on_task is False, do NOT say "you left your task" or "you moved away from your application" because they never opened it. Instead say "you're on [actual app from latest event] -- ready to open your [task]?"
+- If the latest event mentions sustained drift (user stuck on same drift app for a while), acknowledge the TIME they have been there, not just the app.
+- If the latest event says "NOTIFICATION PULL", be extra gentle. The user did NOT choose to open this app -- it popped up on its own (a call, a notification, an alert). Say something like "Looks like [app] pulled you away. Take a moment if needed, I'll be here." Do NOT count notification pulls as intentional drift.
+- If the latest event mentions "NO keyboard or mouse activity", this is silent drift. The correct window is open but the user is not engaging. Ask gently: "Your screen has been quiet for a while. Still with me, or need a break?"
+- Never repeat the same phrasing twice in a session. Vary your tone and wording
 
 Return ONLY JSON (no markdown, no backticks):
 {{
@@ -313,36 +330,38 @@ Return ONLY JSON (no markdown, no backticks):
 
 
 # ============================================================
-# VOICE (ElevenLabs placeholder)
+# VOICE (ElevenLabs)
 # ============================================================
-client = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
+elevenlabs_client = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
 VOICE_ID = "CwhRBWXzGAHq8TQ4Fs17"  # Roger
 
 async def speak(message: str):
-    print(f"\nSpeaking: \"{text}\"")
-    audio = client.text_to_speech.convert(
-        text=text,
-        voice_id=VOICE_ID,
-        model_id="eleven_multilingual_v2",
-        output_format="mp3_44100_128",
-    )
-    play(audio)
-    print("Done.")
+    try:
+        print(f'\nSpeaking: "{message}"')
+        audio = elevenlabs_client.text_to_speech.convert(
+            text=message,
+            voice_id=VOICE_ID,
+            model_id="eleven_multilingual_v2",
+            output_format="mp3_44100_128",
+        )
+        await asyncio.to_thread(play, audio)
+        print("Done.")
+    except Exception as e:
+        print("[VOICE ERROR]", repr(e))
 
 
 # ============================================================
 # WEBSOCKET -- send events to React frontend
 # ============================================================
 async def broadcast(event: dict):
-    """Send an event to all connected React frontends"""
     disconnected = []
-    for client in connected_clients:
+    for ws in connected_clients:
         try:
-            await client.send_json(event)
+            await ws.send_json(event)
         except:
-            disconnected.append(client)
-    for client in disconnected:
-        connected_clients.remove(client)
+            disconnected.append(ws)
+    for ws in disconnected:
+        connected_clients.remove(ws)
 
 
 @app.websocket("/ws")
@@ -354,7 +373,6 @@ async def websocket_endpoint(websocket: WebSocket):
 
     try:
         while True:
-            # Listen for messages from frontend (button clicks)
             data = await websocket.receive_json()
             action = data.get("action", "")
 
@@ -369,7 +387,6 @@ async def websocket_endpoint(websocket: WebSocket):
                 await broadcast({"type": "break_started", "duration": 300})
 
             elif action == "im_ready":
-                session_state["ever_on_task"] = True
                 add_observation("User clicked: I'm ready (task initiation)", "user_response")
                 await broadcast({"type": "status", "value": "focused"})
 
@@ -392,6 +409,7 @@ async def monitoring_loop():
     last_title = ""
     last_relevant_window = ""
     relevant_window_start = None
+    last_window_change_time = time.time()  # Track when the last window switch happened
 
     print("\n[MONITOR] Starting monitoring loop...")
 
@@ -421,6 +439,21 @@ async def monitoring_loop():
 
         # Window changed
         if title != last_title:
+
+            # Detect notification pull vs self-initiated switch
+            time_since_last_switch = time.time() - last_window_change_time
+            time_since_last_activity = time.time() - last_activity_time
+            # If window changed within 2 sec of last activity on previous window,
+            # AND user didn't type/click in the new window yet = notification pull
+            is_notification_pull = time_since_last_switch < 3 and time_since_last_activity < 3
+            last_window_change_time = time.time()
+
+            # Reset sustained drift tracking (user moved to a different window)
+            session_state["sustained_drift_start"] = None
+            session_state["sustained_drift_nudged"] = False
+            # Reset idle tracking (window changed = activity)
+            session_state["idle_nudged"] = False
+
             # Classify the new window
             result = classify_window(
                 session_state["task_context"],
@@ -467,8 +500,9 @@ async def monitoring_loop():
 
             # DRIFT: save to history, call agent
             elif verdict == "drift":
-                add_observation(f"Window: {title} --> drift ({confidence:.0%}). Reason: {reason}")
-                event_summary = f"Window changed to: {title} --> drift ({confidence:.0%}). Reason: {reason}. Total drifts: {session_state['drift_count']}"
+                notification_note = " This was likely a NOTIFICATION PULL (app popped up on its own, user didn't deliberately navigate here). Be extra gentle." if is_notification_pull else " User deliberately navigated here."
+                add_observation(f"Window: {title} --> drift ({confidence:.0%}). Reason: {reason}.{notification_note}")
+                event_summary = f"Window changed to: {title} --> drift ({confidence:.0%}). Reason: {reason}. Total drifts: {session_state['drift_count']}.{notification_note}"
 
                 print(f"  [MONITOR] [{elapsed}m] DRIFT: {title[:60]}")
                 print(f"  [AGENT] Thinking...")
@@ -491,8 +525,9 @@ async def monitoring_loop():
 
             # UNSURE: save to history, call agent to decide whether to ask
             elif verdict == "unsure":
-                add_observation(f"Window: {title} --> unsure ({confidence:.0%}). Reason: {reason}")
-                event_summary = f"Window changed to: {title} --> unsure ({confidence:.0%}). Reason: {reason}"
+                notification_note = " This was likely a NOTIFICATION PULL (app popped up on its own)." if is_notification_pull else ""
+                add_observation(f"Window: {title} --> unsure ({confidence:.0%}). Reason: {reason}.{notification_note}")
+                event_summary = f"Window changed to: {title} --> unsure ({confidence:.0%}). Reason: {reason}.{notification_note}"
 
                 print(f"  [MONITOR] [{elapsed}m] UNSURE: {title[:60]}")
 
@@ -514,7 +549,7 @@ async def monitoring_loop():
         else:
             # Same window -- check timeouts
 
-            # Long stay on relevant app (15+ min, using 2 min for testing)
+            # Long stay on relevant app (15+ min)
             if relevant_window_start and last_relevant_window:
                 time_on_window = (time.time() - relevant_window_start) / 60
                 long_stay_apps = ["claude", "chatgpt", "youtube", "openai"]
@@ -535,8 +570,63 @@ async def monitoring_loop():
                         })
                     relevant_window_start = time.time()  # reset
 
-            # Task initiation (3 min, never on task)
-            if not session_state.get("ever_on_task") and elapsed >= 3:
+            # Sustained drift -- stuck on a drift app too long
+            if last_title and last_title in classification_cache:
+                last_verdict = classification_cache[last_title].get("verdict")
+                if last_verdict == "drift" and relevant_window_start is None:
+                    # Start tracking if not already
+                    if not session_state.get("sustained_drift_start"):
+                        session_state["sustained_drift_start"] = time.time()
+
+                    sustained_minutes = (time.time() - session_state["sustained_drift_start"]) / 60
+
+                    if sustained_minutes >= 1 and not session_state.get("sustained_drift_nudged"):
+                        event_summary = f"User has been on drift app '{last_title}' for {sustained_minutes:.1f} minutes without leaving. They are stuck on this app even though it's not task-related."
+                        print(f"  [MONITOR] Sustained drift: {sustained_minutes:.1f}min on {last_title[:40]}")
+
+                        decision = anchor_agent_decide(event_summary)
+                        if decision["action"] != "stay_silent":
+                            print(f"  [AGENT] SUSTAINED DRIFT: {decision['message']}")
+                            await speak(decision["message"])
+                            await broadcast({
+                                "type": "nudge",
+                                "nudge_type": decision["action"],
+                                "message": decision["message"],
+                                "options": decision.get("options", [])
+                            })
+                        session_state["sustained_drift_nudged"] = True
+
+            # Silent drift -- correct window open but no keyboard/mouse activity
+            # Threshold depends on task type
+            activity_type = session_state.get("task_context", {}).get("activity_type", "mixed")
+            idle_thresholds = {
+                "writing": 1,    # forms, essays, quizzes - constant typing expected
+                "coding": 3,     # sometimes you think before typing
+                "browsing": 1,   # should be clicking/scrolling
+                "reading": 7,    # legitimately staring at screen
+                "mixed": 1,      # default
+            }
+            idle_threshold = idle_thresholds.get(activity_type, 3)
+
+            idle_minutes = (time.time() - last_activity_time) / 60
+            if idle_minutes >= idle_threshold and session_state.get("ever_on_task") and not session_state.get("idle_nudged"):
+                event_summary = f"User has the correct window open but has had NO keyboard or mouse activity for {idle_minutes:.1f} minutes (threshold for {activity_type} task: {idle_threshold} min). They may have picked up their phone, zoned out, or left their desk."
+                print(f"  [MONITOR] Silent drift: {idle_minutes:.1f}min idle (threshold: {idle_threshold}min for {activity_type})")
+
+                decision = anchor_agent_decide(event_summary)
+                if decision["action"] != "stay_silent":
+                    print(f"  [AGENT] SILENT DRIFT: {decision['message']}")
+                    await speak(decision["message"])
+                    await broadcast({
+                        "type": "nudge",
+                        "nudge_type": "silent_drift",
+                        "message": decision["message"],
+                        "options": ["I'm here", "Taking a break"]
+                    })
+                session_state["idle_nudged"] = True
+
+            # Task initiation (1 min for testing, 3 min production)
+            if not session_state.get("ever_on_task") and not session_state.get("task_initiation_nudged") and elapsed >= 1:
                 event_summary = f"User has been in session for {elapsed} minutes but NEVER opened a task-relevant app. Task initiation paralysis."
                 print(f"  [MONITOR] Task initiation timeout: {elapsed}min, never on task")
 
@@ -549,7 +639,7 @@ async def monitoring_loop():
                         "message": decision["message"],
                         "options": ["I'm ready"]
                     })
-                session_state["ever_on_task"] = True  # prevent re-trigger
+                session_state["task_initiation_nudged"] = True
 
             # Hyperfocus (40+ min no break)
             last_break = session_state.get("last_break_time", session_state.get("start_time", time.time()))
@@ -567,7 +657,7 @@ async def monitoring_loop():
                         "message": decision["message"],
                         "options": ["Take a break", "Keep going"]
                     })
-                session_state["last_break_time"] = time.time()  # prevent re-trigger
+                session_state["last_break_time"] = time.time()
 
         await asyncio.sleep(5)
 
@@ -581,12 +671,10 @@ def build_session_summary() -> dict:
     """Build the end-of-session summary from observation history"""
     total_time = round((time.time() - session_state["start_time"]) / 60, 1)
 
-    # Count events
     drift_observations = [o for o in observation_history
                           if o["type"] == "event" and "drift" in o.get("summary", "").lower()]
     nudge_observations = [o for o in observation_history if o["type"] == "nudge"]
 
-    # Find top drift app
     drift_apps = []
     for d in drift_observations:
         summary = d.get("summary", "")
@@ -599,7 +687,6 @@ def build_session_summary() -> dict:
     top_trigger = top_drift[0][0] if top_drift else "None"
     top_trigger_count = top_drift[0][1] if top_drift else 0
 
-    # Calculate longest focus streak
     longest_streak = 0
     streak_start = None
     for obs in observation_history:
@@ -616,7 +703,6 @@ def build_session_summary() -> dict:
         streak = total_time - streak_start
         longest_streak = max(longest_streak, streak)
 
-    # Build timeline segments
     timeline = []
     current_type = "focused"
     segment_start = 0
@@ -673,12 +759,10 @@ async def start_session(request: SessionStartRequest):
     if session_active:
         return {"error": "Session already active. End it first."}
 
-    # Build task context
     print(f"\n[SESSION] Starting: '{request.task}' for {request.duration} min")
     task_context = create_task_context(request.task)
     print(f"[SESSION] Context built: {task_context.get('domain', 'unknown')}")
 
-    # Initialize session state
     session_state = {
         "task": request.task,
         "task_context": task_context,
@@ -691,10 +775,13 @@ async def start_session(request: SessionStartRequest):
         "last_break_time": time.time(),
         "ever_on_task": False,
         "expected_notifications": request.expected_notifications,
-        "dnd_enabled": request.dnd
+        "dnd_enabled": request.dnd,
+        "task_initiation_nudged": False,
+        "sustained_drift_start": None,
+        "sustained_drift_nudged": False,
+        "idle_nudged": False,
     }
 
-    # Reset history and cache
     observation_history = []
     classification_cache = {}
 
@@ -704,11 +791,9 @@ async def start_session(request: SessionStartRequest):
         "session_started"
     )
 
-    # Start monitoring in background
     session_active = True
     monitoring_task = asyncio.create_task(monitoring_loop())
 
-    # Notify frontend
     await broadcast({
         "type": "session_started",
         "task": request.task,
@@ -732,7 +817,6 @@ async def end_session():
     if not session_active:
         return {"error": "No active session"}
 
-    # Stop monitoring
     session_active = False
     if monitoring_task:
         monitoring_task.cancel()
@@ -741,19 +825,14 @@ async def end_session():
         except asyncio.CancelledError:
             pass
 
-    # Build summary
     summary = build_session_summary()
 
     print(f"\n[SESSION] Ended. Focus: {summary['focused_time_min']}min, Drifts: {summary['drift_count']}")
 
-    # Notify frontend
     await broadcast({
         "type": "session_ended",
         "summary": summary
     })
-
-    # TODO: Saturday -- send summary to Pattern Agent for cross-session analysis
-    # pattern_agent.analyze(summary)
 
     return {"status": "session_ended", "summary": summary}
 
