@@ -19,6 +19,9 @@ import subprocess
 from datetime import datetime
 from collections import Counter
 from typing import Optional
+from elevenlabs.client import ElevenLabs
+from elevenlabs.play import play
+
 
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -44,6 +47,7 @@ app.add_middleware(
 
 # Gemini client
 gemini_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+
 
 # Connected WebSocket clients (React frontends)
 connected_clients: list[WebSocket] = []
@@ -311,17 +315,19 @@ Return ONLY JSON (no markdown, no backticks):
 # ============================================================
 # VOICE (ElevenLabs placeholder)
 # ============================================================
+client = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
+VOICE_ID = "CwhRBWXzGAHq8TQ4Fs17"  # Roger
+
 async def speak(message: str):
-    """
-    Speak a message via ElevenLabs.
-    TODO: Replace with actual ElevenLabs API call on Saturday.
-    For now, just logs the message.
-    """
-    print(f"  [VOICE] Would say: \"{message}\"")
-    # Saturday: Person C adds ElevenLabs here
-    # import elevenlabs
-    # audio = elevenlabs.generate(text=message, voice="warm_voice")
-    # elevenlabs.play(audio)
+    print(f"\nSpeaking: \"{text}\"")
+    audio = client.text_to_speech.convert(
+        text=text,
+        voice_id=VOICE_ID,
+        model_id="eleven_multilingual_v2",
+        output_format="mp3_44100_128",
+    )
+    play(audio)
+    print("Done.")
 
 
 # ============================================================
