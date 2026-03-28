@@ -270,6 +270,13 @@ Return ONLY valid JSON. No markdown, no backticks."""
 
 def classify_window(task_context: dict, window_title: str, expected_notifications: str = "") -> dict:
     """Classify if a window is relevant to the task"""
+
+    # Skip Anchor's own windows -- these are never task-relevant
+    anchor_keywords = ["anchor", "adhd-anchor", "stay focused"]
+    if any(kw in window_title.lower() for kw in anchor_keywords):
+        result = {"verdict": "unsure", "confidence": 0.5, "reason": "Anchor app itself -- not the user's task"}
+        return result
+
     if window_title in classification_cache:
         cached = classification_cache[window_title].copy()
         cached["from_cache"] = True
@@ -402,10 +409,15 @@ LATEST EVENT:
 {new_event_summary}
 
 Based on the above, diagnose why the user is in this state and choose the right tool(s).
-If the user is focused, use NO tools (stay silent).
-If this is the 1st drift, use NO tools (stay silent, let them self-correct).
-If drift_count >= 2, you MUST use a tool.
-If recent_nudges >= 3, use suggest_break -- nagging makes ADHD worse.
+If the user is focused on a task-relevant app, use NO tools (stay silent).
+If this is the very 1st drift AND no other issues, use NO tools (stay silent, let them self-correct).
+OTHERWISE YOU MUST CALL A TOOL. Specifically:
+- drift_count >= 2: MUST call speak_to_user or ask_user.
+- ever_on_task is False and elapsed >= 0.7: MUST call chunk_task or speak_to_user to help them start.
+- Sustained drift (1+ min on drift app): MUST call speak_to_user.
+- User spoke via voice: MUST call speak_to_user to respond.
+- recent_nudges >= 3: MUST call suggest_break -- nagging makes ADHD worse.
+DO NOT just output text. You MUST call a tool or the user hears nothing.
 All messages must reference the user's actual task: "{session_state['task']}" and actual apps from history.
 If ever_on_task is False, say "you're on [actual app] -- ready to open your [task]?"
 NEVER repeat phrasing from previous nudges in the history."""
@@ -659,6 +671,156 @@ agent_executor = create_anchor_agent()
 print("[AGENT] LangChain agent with 6 tools created.")
 
 
+def speak_sync(message: str):
+    """Synchronous voice for use inside LangChain tools (which are sync)."""
+    try:
+        print(f'\n  [TOOL: speak] "{message}"', flush=True)
+        audio = elevenlabs_client.text_to_speech.convert(
+            text=message, voice_id=VOICE_ID,
+            model_id="eleven_multilingual_v2", output_format="mp3_44100_128",
+        )
+        play(audio)
+        print("  [TOOL: speak] Done.", flush=True)
+    except Exception as e:
+        import traceback
+        print(f"  [VOICE ERROR] {repr(e)}", flush=True)
+        traceback.print_exc()
+
+
+# ============================================================
+# LANGCHAIN AGENT TOOLS (6 tools)
+# ============================================================
+
+@tool
+def speak_to_user(message: str) -> str:
+    """Speak a message to the user via ElevenLabs voice. Use for gentle nudges,
+    observations, encouragement. Keep to 1-2 sentences MAX."""
+    speak_sync(message)
+    return f"Spoke to user: {message}"
+
+@tool
+def ask_user(question: str) -> str:
+    """Ask the user a question via voice. User responds by speaking back or clicking buttons.
+    Use when you need input -- unsure apps, checking if stuck, offering choices."""
+    speak_sync(question)
+    return f"Asked user via voice: {question}"
+
+@tool
+def suggest_break(duration_minutes: int, activity: str) -> str:
+    """Suggest a break with a specific GOOD activity. Use when executive function
+    tank is depleted (focused long then crashing), or 3+ nudges ignored.
+    ALWAYS suggest physical: stretch, walk, water, fresh air. NEVER phone/social media."""
+    msg = f"Time for a {duration_minutes}-minute break. {activity}"
+    print(f'\n  [TOOL: suggest_break] {duration_minutes}min - {activity}')
+    speak_sync(msg)
+    session_state["break_active"] = True
+    session_state["break_start"] = time.time()
+    return f"Suggested {duration_minutes} min break: {activity}"
+
+@tool
+def chunk_task(task_name: str, tiny_next_step: str) -> str:
+    """Break user's task into smallest possible next step. Use when overwhelmed
+    (never started), stuck (was working then stopped), or avoiding (drifts within 1-2 min).
+    Step must be SO small it feels effortless. Forms='fill first field'. Reading='read abstract'.
+    Coding='write function signature'. Writing='write one bad sentence'."""
+    msg = f"Here's what to do next: {tiny_next_step}"
+    print(f'\n  [TOOL: chunk_task] {task_name} -> {tiny_next_step}')
+    speak_sync(msg)
+    return f"Suggested tiny step for '{task_name}': {tiny_next_step}"
+
+@tool
+def search_adhd_strategy(situation: str) -> str:
+    """Search for ADHD-specific strategies via Tavily when standard approaches fail.
+    Use sparingly -- maybe once per session. Examples: 'executive function depletion',
+    'task initiation paralysis', 'boredom with repetitive tasks'."""
+    if not TAVILY_AVAILABLE:
+        return "Tavily not available. Use your built-in ADHD knowledge instead."
+    try:
+        tavily = TavilySearchResults(max_results=3)
+        results = tavily.invoke(f"ADHD {situation} strategy evidence-based")
+        summaries = [r["content"][:200] for r in results if isinstance(r, dict) and "content" in r]
+        return "Research findings: " + " | ".join(summaries) if summaries else "No results found."
+    except Exception as e:
+        return f"Search failed: {e}. Use built-in ADHD knowledge."
+
+@tool
+def suggest_dnd(reason: str) -> str:
+    """Suggest user enable Do Not Disturb. Use when notifications keep pulling
+    user away -- pattern of fast window switches to messaging apps."""
+    msg = f"You might want to turn on Do Not Disturb. {reason}"
+    print(f'\n  [TOOL: suggest_dnd] {reason}')
+    speak_sync(msg)
+    return f"Suggested DND: {reason}"
+
+
+# ============================================================
+# CREATE LANGCHAIN AGENT
+# ============================================================
+
+AGENT_SYSTEM_PROMPT = """You are Anchor, an AI body double with deep knowledge of ADHD neuroscience.
+You understand executive function depletion (Barkley's fuel tank model), time blindness,
+task initiation paralysis, hyperfocus risks, and good vs bad breaks.
+You are warm, supportive, never accusatory.
+
+6 TOOLS -- choose based on WHY the user is struggling:
+1. speak_to_user: Gentle nudges, encouragement. Most common tool.
+2. ask_user: Need user input via voice. Unsure apps, checking if stuck.
+3. suggest_break: Brain depleted. 20+ min focused then crashing, 3+ drifts in 5 min, 3+ nudges ignored. Physical activity only, never phone.
+4. chunk_task: Overwhelmed, stuck, or avoiding. SMALLEST possible next step specific to their task.
+5. search_adhd_strategy: Standard approaches failing. Research-backed fresh approach. Use sparingly.
+6. suggest_dnd: Notifications keep pulling user away.
+
+DIAGNOSIS -- diagnose BEFORE choosing tool:
+* DEPLETED: Focused 20+ min then drifting -> suggest_break
+* STUCK: Was working then hit wall -> chunk_task
+* OVERWHELMED: Never started, bouncing between apps -> chunk_task with smallest first step
+* BORED: Drifting to fun apps -> speak_to_user with empathy + mini-goal
+* AVOIDING: Returns but drifts within 1-2 min -> speak_to_user to name it + chunk_task
+* NOTIFICATION PULL: Fast switch, event says "NOTIFICATION PULL" -> suggest_dnd or speak_to_user gently
+* SILENT DRIFT: No keyboard/mouse -> ask_user "still with me?"
+
+RULES:
+- 1st drift: NO tools. Stay silent. Chance to self-correct.
+- 2nd drift: speak_to_user with gentle nudge.
+- 3rd+ drift: MUST use tool. Diagnose and pick right one.
+- 3+ nudges in 5 min: ALWAYS suggest_break. Nagging makes ADHD worse.
+- Messages MUST be specific to user's actual task. Never generic.
+- 1-2 sentences MAX. NEVER repeat same phrasing.
+- NEVER mention apps user hasn't visited. Use ACTUAL app names from history.
+- If ever_on_task is False: "you're on [actual app] -- ready to open your [task]?"
+- Task chunking: forms="fill first field", reading="read abstract", coding="write function signature"
+- Acknowledge task tedium: "Forms are repetitive" / "Dense papers are hard"
+- Can chain tools: search_adhd_strategy then speak_to_user with findings.
+- After break: chunk_task "What's the ONE small thing you'll do first?"
+
+When user is focused: NO tool calls (stay silent).
+
+CRITICAL: You MUST call a tool (speak_to_user, ask_user, suggest_break, or chunk_task) in ALL of these situations:
+- drift_count >= 2: User has drifted multiple times.
+- ever_on_task is False and elapsed >= 0.7 min: User hasn't even opened their task after 40+ seconds. Use chunk_task or speak_to_user to help them start.
+- User has been on a drift app for 1+ minute (sustained drift event).
+- User spoke via voice: ALWAYS respond with speak_to_user or ask_user.
+- 3+ nudges recently: Use suggest_break instead of another nudge.
+
+Do NOT just output text -- you MUST invoke a tool. Outputting text without calling a tool means the user hears NOTHING. The ONLY way to communicate with the user is through tools. If you want to say something, call speak_to_user. If you want to stay silent, call no tools."""
+
+
+def create_anchor_agent():
+    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.7)
+    tools = [speak_to_user, ask_user, suggest_break, chunk_task, search_adhd_strategy, suggest_dnd]
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", AGENT_SYSTEM_PROMPT),
+        ("human", "{input}"),
+        MessagesPlaceholder(variable_name="agent_scratchpad"),
+    ])
+    agent = create_tool_calling_agent(llm, tools, prompt)
+    return AgentExecutor(agent=agent, tools=tools, verbose=True, max_iterations=3, handle_parsing_errors=True)
+
+
+agent_executor = create_anchor_agent()
+print("[AGENT] LangChain agent with 6 tools created.")
+
+
 # ============================================================
 # WEBSOCKET -- send events to React frontend
 # ============================================================
@@ -703,9 +865,95 @@ async def websocket_endpoint(websocket: WebSocket):
                 add_observation("User clicked: Got it (notification acknowledged)", "user_response")
                 await broadcast({"type": "status", "value": "focused"})
 
+            elif action == "user_speech":
+                user_text = data.get("text", "").strip()
+                if user_text and session_active:
+                    print(f'\n  [VOICE IN] User said: "{user_text}"')
+                    add_observation(f'User said via voice: "{user_text}"', "user_voice")
+
+                    # Feed to agent for response
+                    event_summary = f'User spoke via voice: "{user_text}". Respond to what they said in context of the session.'
+                    decision = anchor_agent_decide(event_summary)
+                    if decision["action"] != "stay_silent":
+                        print(f'  [AGENT] Responding to voice: {decision["message"]}')
+                        if not decision.get("already_spoken"):
+                            await speak(decision["message"])
+                        await broadcast({
+                            "type": "nudge",
+                            "nudge_type": decision["action"],
+                            "message": decision["message"],
+                            "options": decision.get("options", [])
+                        })
+
     except WebSocketDisconnect:
         connected_clients.remove(websocket)
         print(f"Frontend disconnected. Total clients: {len(connected_clients)}")
+
+
+# ============================================================
+# AUDIO WEBSOCKET -- receives mic audio, sends to ElevenLabs STT
+# ============================================================
+@app.websocket("/ws-audio")
+async def audio_websocket(websocket: WebSocket):
+    await websocket.accept()
+    print("[AUDIO-WS] Client connected for STT")
+
+    try:
+        while True:
+            # Receive binary audio data from frontend
+            data = await websocket.receive_bytes()
+            if len(data) < 1000:
+                continue  # Skip tiny chunks (silence/noise)
+
+            print(f"  [AUDIO-WS] Received {len(data)} bytes, sending to ElevenLabs STT...")
+
+            try:
+                # Send to ElevenLabs STT (file must be a tuple: filename, bytes, mimetype)
+                import io
+                audio_file = ("audio.webm", io.BytesIO(data), "audio/webm")
+                result = await asyncio.to_thread(
+                    elevenlabs_client.speech_to_text.convert,
+                    file=audio_file,
+                    model_id="scribe_v1",
+                    language_code="en",
+                )
+                text = result.text.strip() if hasattr(result, 'text') else str(result).strip()
+
+                if text and len(text) > 1:
+                    print(f'  [STT] Transcribed: "{text}"')
+
+                    # Send transcription back to frontend
+                    await websocket.send_json({"type": "transcription", "text": text})
+
+                    # Also process as user speech if session is active
+                    if session_active:
+                        add_observation(f'User said via voice: "{text}"', "user_voice")
+                        event_summary = f'User spoke via voice: "{text}". Respond to what they said in context of the session.'
+                        decision = anchor_agent_decide(event_summary)
+                        if decision["action"] != "stay_silent":
+                            print(f'  [AGENT] Responding to voice: {decision["message"]}')
+                            if not decision.get("already_spoken"):
+                                await speak(decision["message"])
+                            await broadcast({
+                                "type": "nudge",
+                                "nudge_type": decision["action"],
+                                "message": decision["message"],
+                                "options": decision.get("options", [])
+                            })
+                else:
+                    print("  [STT] No speech detected in chunk")
+
+            except Exception as e:
+                import traceback
+                print(f"  [STT ERROR] {repr(e)}")
+                if hasattr(e, 'body'):
+                    print(f"  [STT ERROR body] {e.body}")
+                if hasattr(e, 'status_code'):
+                    print(f"  [STT ERROR status] {e.status_code}")
+                traceback.print_exc()
+
+    except WebSocketDisconnect:
+        print("[AUDIO-WS] Client disconnected")
 
 
 # ============================================================

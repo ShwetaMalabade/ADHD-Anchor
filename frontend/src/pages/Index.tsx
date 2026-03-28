@@ -184,6 +184,14 @@ const Index = () => {
     return () => clearTimeout(t);
   }, [screen]);
 
+  // Send user speech transcript to backend
+  const handleUserSpeech = (transcript: string) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      console.log("[SPEECH] Sending to backend:", transcript);
+      wsRef.current.send(JSON.stringify({ action: "user_speech", text: transcript }));
+    }
+  };
+
   const handleStartSession = (t: string, d: number) => {
     setTask(t);
     setDurationMin(d);
@@ -301,7 +309,7 @@ const Index = () => {
 
         {screen === "focusing" && (
           <div key="focusing" className="min-h-screen">
-            <AgoraRoom />
+            <AgoraRoom onUserSpeech={handleUserSpeech} />
             <FocusWidget
               task={task}
               status={focusStatus}
