@@ -22,6 +22,7 @@ const ACTIVITY_COLORS: Record<string, string> = {
 
 const WelcomeScreen = ({ onComplete, onGreet }: Props) => {
   const [cameraReady, setCameraReady] = useState(false);
+  const [cameraError, setCameraError] = useState(false);
   const [greeting, setGreeting] = useState("");
   const [showGreeting, setShowGreeting] = useState(false);
   const [countdown, setCountdown] = useState(10);
@@ -31,6 +32,8 @@ const WelcomeScreen = ({ onComplete, onGreet }: Props) => {
   const [micListening, setMicListening] = useState(false);
   const imgRef = useRef<HTMLImageElement>(null);
   const greetedRef = useRef(false);
+  const onCompleteRef = useRef(onComplete);
+  onCompleteRef.current = onComplete;
 
   // Start camera on mount
   useEffect(() => {
@@ -132,12 +135,12 @@ const WelcomeScreen = ({ onComplete, onGreet }: Props) => {
     if (!showGreeting) return;
     if (countdown <= 0) {
       setFadeOut(true);
-      setTimeout(() => onComplete(), 800);
+      setTimeout(() => onCompleteRef.current(), 800);
       return;
     }
     const t = setTimeout(() => setCountdown((c) => c - 1), 1000);
     return () => clearTimeout(t);
-  }, [showGreeting, countdown, onComplete]);
+  }, [showGreeting, countdown]);
 
   return (
     <motion.div
@@ -154,18 +157,22 @@ const WelcomeScreen = ({ onComplete, onGreet }: Props) => {
           transition={{ delay: 0.3, duration: 0.6 }}
           className="relative rounded-3xl overflow-hidden shadow-2xl border border-border bg-card"
         >
-          {cameraReady ? (
+          {cameraReady && !cameraError ? (
             <img
               ref={imgRef}
               src={`${BACKEND_URL}/video_feed`}
               alt="Activity Monitor"
               className="w-full aspect-video object-cover"
               onError={() => {
-                if (imgRef.current) {
-                  imgRef.current.style.display = "none";
-                }
+                setCameraError(true);
               }}
             />
+          ) : cameraReady && cameraError ? (
+            <div className="w-full aspect-video bg-gradient-to-br from-sage/10 to-amber/10 flex flex-col items-center justify-center gap-2">
+              <span className="text-3xl">📷</span>
+              <p className="text-sm text-muted-foreground">Camera unavailable</p>
+              <p className="text-xs text-muted-foreground/60">Start the backend to enable webcam</p>
+            </div>
           ) : (
             <div className="w-full aspect-video bg-card flex items-center justify-center">
               <motion.div

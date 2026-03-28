@@ -10,11 +10,13 @@ import SessionSummary from "@/components/SessionSummary";
 import AgoraRoom from "@/components/AgoraRoom";
 import SmiskiCompanion from "@/components/SmiskiCompanion";
 import WelcomeScreen from "@/components/WelcomeScreen";
+import DemoLog, { type LogEntry } from "@/components/DemoLog";
 
 type Screen = "welcome" | "start" | "dnd" | "focusing" | "break" | "summary" | "done";
 type FocusStatus = "focused" | "checking" | "drifted";
 type NudgeType = "none" | "drift" | "notification" | "initiation";
 
+const BACKEND_URL = "http://localhost:8000";
 const DRIFT_SOURCES = ["YouTube", "Reddit", "Twitter", "Instagram", "TikTok"];
 
 const Index = () => {
@@ -35,6 +37,19 @@ const Index = () => {
   const driftTimer = useRef<ReturnType<typeof setTimeout>>();
   const wsRef = useRef<WebSocket | null>(null);
   const wsConnected = useRef(false);
+  const [sessionLog, setSessionLog] = useState<LogEntry[]>([]);
+  const logIdCounter = useRef(0);
+  const elapsedRef = useRef(0);
+
+  useEffect(() => { elapsedRef.current = elapsed; }, [elapsed]);
+
+  const addLog = (type: LogEntry["type"], icon: string, message: string) => {
+    logIdCounter.current += 1;
+    const ts = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
+    const sec = elapsedRef.current;
+    const elapsedStr = sec >= 60 ? `${Math.floor(sec / 60)}m ${sec % 60}s elapsed` : `${sec}s elapsed`;
+    setSessionLog((prev) => [...prev, { id: logIdCounter.current, timestamp: ts, elapsed: elapsedStr, type, icon, message }]);
+  };
 
   // Timer
   useEffect(() => {
@@ -75,24 +90,47 @@ const Index = () => {
       ws.onmessage = (e) => {
         try {
           const data = JSON.parse(e.data);
+
           if (data.type === "nudge" || data.type === "phone_detected") {
-            const source = data.source || "something";
             setFocusStatus("drifted");
-            setDriftCount((c) => c + 1);
-            setDriftTriggers((prev) => [...prev, source]);
+            if (data.drift_count != null) {
+              setDriftCount(data.drift_count);
+            }
             nudgeCounter.current += 1;
-            setActiveNudge({
-              text: data.message || `Hey, you drifted to ${source}. Break or get back?`,
-              id: nudgeCounter.current,
-            });
+            const msg = data.message || "Hey, you drifted. Break or get back?";
+            setActiveNudge({ text: msg, id: nudgeCounter.current });
+            addLog("nudge", "\u{1F5E3}\uFE0F", `Anchor: "${msg}"`);
+          } else if (data.type === "status") {
+            setFocusStatus(data.value);
+            const statusIcon = data.value === "focused" ? "\u2705" : data.value === "drifted" ? "\u{1F6A8}" : "\u{1F7E1}";
+            addLog("status", statusIcon, `Status \u2192 ${data.value}`);
+          } else if (data.type === "classification") {
+            const verdictIcon = data.verdict === "relevant" ? "\u2705" : data.verdict === "drift" ? "\u{1F6A8}" : "\u{1F7E1}";
+            const conf = data.confidence != null ? ` (${Math.round(data.confidence * 100)}%)` : "";
+            addLog("window", verdictIcon, `${data.window || "Unknown window"} \u2192 ${data.verdict}${conf}`);
+            if (data.verdict === "drift") {
+              if (data.drift_count != null) setDriftCount(data.drift_count);
+              const appName = (data.window || "").split(" - ")[0].trim() || "Unknown";
+              setDriftTriggers((prev) => [...prev, appName]);
+            }
+          } else if (data.type === "break_started") {
+            setNudge("none");
+            setActiveNudge(null);
+            setScreen("break");
+            addLog("break", "\u2615", "Break started (5 min)");
+          } else if (data.type === "break_ended") {
+            setFocusStatus("focused");
+            setScreen("focusing");
+            addLog("break", "\u23F0", "Break ended \u2014 back to work");
+          } else if (data.type === "session_ended") {
+            if (driftTimer.current) clearTimeout(driftTimer.current);
+            addLog("session", "\u{1F3C1}", "Session ended");
+            setScreen("summary");
           } else if (data.type === "wave_detected") {
             nudgeCounter.current += 1;
-            setActiveNudge({
-              text: data.message || "Hey! 👋 Great to see you! Ready to crush this session?",
-              id: nudgeCounter.current,
-            });
-          } else if (data.type === "session_summary") {
-            handleEndSession();
+            const msg = data.message || "Hey! Great to see you! Ready to crush this session?";
+            setActiveNudge({ text: msg, id: nudgeCounter.current });
+            addLog("nudge", "\u{1F44B}", msg);
           }
         } catch {}
       };
@@ -112,22 +150,22 @@ const Index = () => {
     const scheduleDrift = () => {
       const delay = 45000 + Math.random() * 90000;
       driftTimer.current = setTimeout(() => {
-        if (wsConnected.current) return; // real events take over
+        if (wsConnected.current) return;
         const isNotification = Math.random() > 0.6;
         const source = DRIFT_SOURCES[Math.floor(Math.random() * DRIFT_SOURCES.length)];
         setFocusStatus("checking");
+        addLog("window", "\u{1F6A8}", `Switched to ${source} \u2192 drift (simulated)`);
         setTimeout(() => {
           setFocusStatus("drifted");
           setDriftCount((c) => c + 1);
           setDriftTriggers((prev) => [...prev, source]);
           nudgeCounter.current += 1;
-          setActiveNudge({
-            text: isNotification
-              ? `Looks like ${source} pulled you out. Take a minute then come back.`
-              : `Hey, you left your task for ${source}. Break or get back?`,
-            id: nudgeCounter.current,
-          });
+          const msg = isNotification
+            ? `Looks like ${source} pulled you out. Take a minute then come back.`
+            : `Hey, you left your task for ${source}. Break or get back?`;
+          setActiveNudge({ text: msg, id: nudgeCounter.current });
           setNudge(isNotification ? "notification" : "drift");
+          addLog("nudge", "\u{1F5E3}\uFE0F", `Anchor: "${msg}"`);
         }, 3000);
       }, delay);
     };
@@ -152,13 +190,18 @@ const Index = () => {
     setScreen("dnd");
   };
 
-  const handleDNDContinue = () => {
-    // Tell backend to start session and begin drift monitoring
-    fetch("http://localhost:8000/session/start", {
+  const handleDNDContinue = (dnd: boolean = true, expectedNotifications: string = "") => {
+    fetch(`${BACKEND_URL}/session/start`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ task, duration_minutes: durationMin }),
-    }).catch(() => {}); // backend may not be running — that's ok
+      body: JSON.stringify({
+        task,
+        duration: durationMin,
+        dnd,
+        expected_notifications: expectedNotifications,
+      }),
+    }).catch((e) => console.warn("Backend session start failed:", e));
+    addLog("session", "\u{1F680}", `Session started: "${task}" (${durationMin} min, DND: ${dnd ? "on" : "off"})`);
     setScreen("focusing");
   };
 
@@ -166,22 +209,32 @@ const Index = () => {
     setNudge("none");
     setFocusStatus("focused");
     setActiveNudge(null);
+    addLog("response", "\u{1F464}", "User clicked: Pull me back");
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ action: "pull_me_back" }));
+    }
   };
 
   const handleTakeBreak = () => {
     setNudge("none");
     setActiveNudge(null);
+    addLog("response", "\u{1F464}", "User clicked: Take a break");
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ action: "taking_break" }));
+    }
     setScreen("break");
   };
 
   const handleBreakEnd = () => {
     setFocusStatus("focused");
+    addLog("break", "\u23F0", "Break ended \u2014 resuming focus");
     setScreen("focusing");
   };
 
   const handleEndSession = () => {
     if (driftTimer.current) clearTimeout(driftTimer.current);
-    fetch("http://localhost:8000/session/end", { method: "POST" }).catch(() => {});
+    addLog("session", "\u{1F3C1}", "Session ended by user");
+    fetch(`${BACKEND_URL}/session/end`, { method: "POST" }).catch(() => {});
     setScreen("summary");
   };
 
@@ -204,6 +257,7 @@ const Index = () => {
     setTimeline([]);
     setLongestStreak(0);
     currentStreak.current = 0;
+    setSessionLog([]);
   };
 
   const finalTimeline = timeline.length > 0 ? timeline : [
@@ -222,6 +276,7 @@ const Index = () => {
   return (
     <div className="min-h-screen bg-background">
       <BackgroundBlob />
+      <DemoLog entries={sessionLog} />
       <SmiskiCompanion
         nudgeText={activeNudge?.text}
         nudgeId={activeNudge?.id}

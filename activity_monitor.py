@@ -83,12 +83,10 @@ class ActivityDetector:
         self.activity_start_time = time.time()
         self.idle_start = None
 
-        # YOLO phone detector (yolov8n — tiny, fast, runs locally)
-        print("[YOLO] Loading YOLOv8n model...")
-        self.yolo = YOLO("yolov8n.pt")  # downloads ~6MB on first run
+        # YOLO disabled — conflicts with MediaPipe Metal GPU on Apple Silicon
+        self.yolo = None
         self.yolo_phone_detected = False
         self.yolo_frame_counter = 0
-        print("[YOLO] Model ready.")
 
     def detect(self, frame):
         """Run all three landmarkers and classify activity."""
@@ -104,11 +102,8 @@ class ActivityDetector:
         pose_result = self.pose_landmarker.detect_for_video(mp_image, ts)
         face_result = self.face_landmarker.detect_for_video(mp_image, ts)
 
-        # Run YOLO every 3 frames to stay fast
-        self.yolo_frame_counter += 1
-        if self.yolo_frame_counter % 3 == 0:
-            results = self.yolo(frame, verbose=False, classes=[67])  # 67 = cell phone
-            self.yolo_phone_detected = len(results[0].boxes) > 0
+        # YOLO disabled — using MediaPipe only for phone detection
+        self.yolo_phone_detected = False
 
         activity, confidence, details = self._classify(hand_result, pose_result, face_result)
 
