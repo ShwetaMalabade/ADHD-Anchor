@@ -1,0 +1,275 @@
+/* ── ADHD Anchor Smiski Overlay ────────────────────────────────────────────── */
+
+#adhd-anchor-root {
+  position: fixed;
+  left: 0;
+  top: 20%;
+  z-index: 2147483647; /* max z-index — on top of everything */
+  display: flex;
+  align-items: flex-start;
+  pointer-events: none;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+/* Left-edge tab — thin strip always visible so user can summon Smiski */
+#adhd-anchor-tab {
+  position: fixed;
+  left: 0;
+  top: calc(20% + 12px);
+  z-index: 2147483646;
+  width: 5px;
+  height: 80px;
+  border-radius: 0 8px 8px 0;
+  background: hsla(75, 30%, 72%, 0.5);
+  cursor: pointer;
+  pointer-events: auto;
+  border: none;
+  padding: 0;
+  transition: width 0.15s ease, background 0.15s ease;
+}
+#adhd-anchor-tab:hover {
+  width: 8px;
+  background: hsla(75, 30%, 60%, 0.8);
+}
+
+/* Character container — slides on x axis */
+#adhd-anchor-character {
+  flex-shrink: 0;
+  pointer-events: auto;
+  cursor: pointer;
+  transform: translateX(-88px);
+  transition: transform 0.45s cubic-bezier(0.34, 1.56, 0.64, 1);
+  will-change: transform;
+}
+#adhd-anchor-character.visible {
+  transform: translateX(0);
+}
+
+/* SVG animations */
+#adhd-anchor-svg {
+  display: block;
+}
+
+/* Body bob group */
+.smiski-body-group {
+  animation: none;
+}
+.smiski-walking .smiski-body-group {
+  animation: smiskiBodyBob 0.38s ease-in-out infinite;
+}
+@keyframes smiskiBodyBob {
+  0%, 100% { transform: translateY(0); }
+  25%, 75% { transform: translateY(-4px); }
+}
+
+/* Back leg */
+.smiski-back-leg {
+  transform-box: fill-box;
+  transform-origin: 50% 20%;
+  transform: rotate(6deg);
+}
+.smiski-walking .smiski-back-leg {
+  transform: none;
+  animation: smiskiBackLeg 0.38s ease-in-out infinite;
+}
+@keyframes smiskiBackLeg {
+  0%, 100% { transform: rotate(18deg); }
+  50% { transform: rotate(-14deg); }
+}
+
+/* Front leg */
+.smiski-front-leg {
+  transform-box: fill-box;
+  transform-origin: 50% 20%;
+  transform: rotate(-6deg);
+}
+.smiski-walking .smiski-front-leg {
+  transform: none;
+  animation: smiskiFrontLeg 0.38s ease-in-out infinite;
+}
+@keyframes smiskiFrontLeg {
+  0%, 100% { transform: rotate(-14deg); }
+  50% { transform: rotate(18deg); }
+}
+
+/* Left arm */
+.smiski-left-arm {
+  transform-box: fill-box;
+  transform-origin: 80% 30%;
+  transform: rotate(12deg);
+}
+.smiski-walking .smiski-left-arm {
+  transform: none;
+  animation: smiskiLeftArm 0.38s ease-in-out infinite;
+}
+@keyframes smiskiLeftArm {
+  0%, 100% { transform: rotate(18deg); }
+  50% { transform: rotate(-8deg); }
+}
+
+/* Right arm — opposite phase */
+.smiski-right-arm {
+  transform-box: fill-box;
+  transform-origin: 20% 30%;
+  transform: rotate(-12deg);
+}
+.smiski-walking .smiski-right-arm {
+  transform: none;
+  animation: smiskiRightArm 0.38s ease-in-out infinite;
+}
+@keyframes smiskiRightArm {
+  0%, 100% { transform: rotate(-8deg); }
+  50% { transform: rotate(18deg); }
+}
+
+/* Urgent wiggle on whole SVG */
+.smiski-urgent {
+  animation: smiskiUrgentWiggle 0.55s ease-in-out;
+}
+@keyframes smiskiUrgentWiggle {
+  0%   { transform: rotate(0deg); }
+  14%  { transform: rotate(-7deg); }
+  28%  { transform: rotate(7deg); }
+  42%  { transform: rotate(-5deg); }
+  56%  { transform: rotate(5deg); }
+  70%  { transform: rotate(-2deg); }
+  86%  { transform: rotate(2deg); }
+  100% { transform: rotate(0deg); }
+}
+
+/* Content panel — bubble + buttons */
+#adhd-anchor-content {
+  margin-left: 10px;
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: auto;
+  opacity: 0;
+  transform: translateX(-8px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+#adhd-anchor-content.visible {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+/* Speech bubble */
+#adhd-anchor-bubble {
+  max-width: 210px;
+  border-radius: 14px 14px 14px 4px;
+  background: #ffffff;
+  border: 1px solid #e5e5e5;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.12);
+  padding: 10px 14px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #1a1a1a;
+  display: none;
+}
+#adhd-anchor-bubble.visible {
+  display: block;
+}
+
+/* Action buttons */
+#adhd-anchor-actions {
+  display: none;
+  flex-direction: column;
+  gap: 6px;
+}
+#adhd-anchor-actions.visible {
+  display: flex;
+}
+
+.adhd-anchor-btn {
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid #e5e5e5;
+  background: #ffffff;
+  color: #1a1a1a;
+  text-align: left;
+  transition: background 0.15s ease;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  white-space: nowrap;
+}
+.adhd-anchor-btn:hover {
+  background: #f5f5f5;
+}
+.adhd-anchor-btn.primary {
+  background: #4a7c59;
+  color: #ffffff;
+  border-color: #4a7c59;
+  font-weight: 600;
+}
+.adhd-anchor-btn.primary:hover {
+  background: #3d6a4a;
+}
+
+/* Menu panel */
+#adhd-anchor-menu {
+  width: 200px;
+  border-radius: 14px;
+  background: #ffffff;
+  border: 1px solid #e5e5e5;
+  box-shadow: 0 8px 30px rgba(0,0,0,0.15);
+  padding: 14px;
+  display: none;
+}
+#adhd-anchor-menu.visible {
+  display: block;
+}
+#adhd-anchor-menu-title {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #888;
+  margin-bottom: 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+#adhd-anchor-menu-close {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #888;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
+}
+#adhd-anchor-menu-close:hover {
+  color: #1a1a1a;
+}
+.adhd-anchor-menu-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border-radius: 10px;
+  padding: 9px 10px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid #e5e5e5;
+  background: #ffffff;
+  color: #1a1a1a;
+  text-align: left;
+  transition: background 0.15s ease;
+  margin-bottom: 5px;
+}
+.adhd-anchor-menu-btn:last-child {
+  margin-bottom: 0;
+}
+.adhd-anchor-menu-btn:hover {
+  background: #f5f5f5;
+}
+
+/* Ground shadow */
+.smiski-shadow {
+  fill: hsl(75, 40%, 82%);
+  fill-opacity: 0.25;
+}
