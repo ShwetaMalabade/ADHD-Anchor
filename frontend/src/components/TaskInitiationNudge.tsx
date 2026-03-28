@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 
 interface Props {
@@ -8,16 +8,18 @@ interface Props {
 const TaskInitiationNudge = ({ onReady }: Props) => {
   const [countdown, setCountdown] = useState(3);
   const [counting, setCounting] = useState(false);
+  const onReadyRef = useRef(onReady);
+  onReadyRef.current = onReady;
 
   useEffect(() => {
     if (!counting) return;
     if (countdown <= 0) {
-      onReady();
+      onReadyRef.current();
       return;
     }
     const t = setTimeout(() => setCountdown((c) => c - 1), 1000);
     return () => clearTimeout(t);
-  }, [counting, countdown, onReady]);
+  }, [counting, countdown]);
 
   return (
     <motion.div

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 
 interface Props {
-  onContinue: (showTransition?: boolean) => void;
+  onContinue: (dnd: boolean, expectedNotifications: string) => void;
 }
 
 const DNDPrompt = ({ onContinue }: Props) => {
@@ -11,7 +11,7 @@ const DNDPrompt = ({ onContinue }: Props) => {
 
   const handleLetsBegin = () => {
     setStep("transition");
-    setTimeout(() => onContinue(false), 1500);
+    setTimeout(() => onContinue(false, expectation), 1500);
   };
 
   return (
@@ -49,7 +49,7 @@ const DNDPrompt = ({ onContinue }: Props) => {
               </div>
               <div className="space-y-3">
                 <button
-                  onClick={() => onContinue()}
+                  onClick={() => onContinue(true, "")}
                   className="btn-primary-action w-full rounded-2xl py-3.5 font-semibold"
                 >
                   Done, turned it on
