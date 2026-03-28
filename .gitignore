@@ -4,4 +4,4 @@ echo "__pycache__/
 .DS_Store
 node_modules/
 .venv/
-venv/" > .gitignore
+venv/" > .gitignoremodels/
