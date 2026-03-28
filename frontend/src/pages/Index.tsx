@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { AnimatePresence } from "framer-motion";
 import BackgroundBlob from "@/components/BackgroundBlob";
+import WelcomeScreen from "@/components/WelcomeScreen";
 import SessionStart from "@/components/SessionStart";
 import DNDPrompt from "@/components/DNDPrompt";
 import FocusWidget from "@/components/FocusWidget";
@@ -10,26 +11,32 @@ import BreakTimer from "@/components/BreakTimer";
 import SessionSummary from "@/components/SessionSummary";
 import AgoraRoom from "@/components/AgoraRoom";
 
-type Screen = "start" | "dnd" | "focusing" | "break" | "summary" | "done";
-type FocusStatus = "focused" | "checking" | "drifted";
-type NudgeType = "none" | "drift" | "notification" | "initiation";
+const BACKEND_URL = "http://localhost:8000";
+const WS_URL = "ws://localhost:8000/ws";
 
-const DRIFT_SOURCES = ["YouTube", "Reddit", "Twitter", "Instagram", "TikTok"];
+type Screen = "welcome" | "start" | "dnd" | "focusing" | "break" | "summary" | "done";
+type FocusStatus = "focused" | "checking" | "drifted";
+type NudgeInfo = {
+  type: "none" | "drift" | "notification" | "ask" | "suggest_break" | "silent_drift" | "task_initiation" | "initiation";
+  message: string;
+  options: string[];
+};
 
 const Index = () => {
-  const [screen, setScreen] = useState<Screen>("start");
+  const [screen, setScreen] = useState<Screen>("welcome");
   const [task, setTask] = useState("");
   const [durationMin, setDurationMin] = useState(60);
   const [elapsed, setElapsed] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
   const [focusStatus, setFocusStatus] = useState<FocusStatus>("focused");
-  const [nudge, setNudge] = useState<NudgeType>("none");
+  const [nudge, setNudge] = useState<NudgeInfo>({ type: "none", message: "", options: [] });
   const [driftCount, setDriftCount] = useState(0);
   const [driftTriggers, setDriftTriggers] = useState<string[]>([]);
   const [timeline, setTimeline] = useState<{ minute: number; focused: boolean; type?: "focus" | "drift" | "break" }[]>([]);
   const [longestStreak, setLongestStreak] = useState(0);
+  const [summaryData, setSummaryData] = useState<any>(null);
   const currentStreak = useRef(0);
-  const driftTimer = useRef<ReturnType<typeof setTimeout>>();
+  const wsRef = useRef<WebSocket | null>(null);
 
   // Timer
   useEffect(() => {
@@ -54,56 +61,133 @@ const Index = () => {
     }
   }, [elapsed, screen, isPaused, focusStatus]);
 
-  // Simulate drift events
-  useEffect(() => {
-    if (screen !== "focusing" || isPaused) return;
-    const scheduleDrift = () => {
-      const delay = 45000 + Math.random() * 90000;
-      driftTimer.current = setTimeout(() => {
-        const isNotification = Math.random() > 0.6;
-        const source = DRIFT_SOURCES[Math.floor(Math.random() * DRIFT_SOURCES.length)];
-        setFocusStatus("checking");
-        setTimeout(() => {
-          setFocusStatus("drifted");
-          setDriftCount((c) => c + 1);
-          setDriftTriggers((prev) => [...prev, source]);
-          setNudge(isNotification ? "notification" : "drift");
-        }, 3000);
-      }, delay);
-    };
-    scheduleDrift();
-    return () => { if (driftTimer.current) clearTimeout(driftTimer.current); };
-  }, [screen, isPaused, driftCount]);
-
-  // Show initiation nudge after 15s if still focusing
+  // Connect WebSocket when focusing
   useEffect(() => {
     if (screen !== "focusing") return;
-    const t = setTimeout(() => {
-      if (nudge === "none" && focusStatus === "focused") {
-        setNudge("initiation");
+
+    const ws = new WebSocket(WS_URL);
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      console.log("[WS] Connected to backend");
+    };
+
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      console.log("[WS] Received:", data);
+
+      switch (data.type) {
+        case "status":
+          if (data.value === "focused") {
+            setFocusStatus("focused");
+          } else if (data.value === "drifted") {
+            setFocusStatus("drifted");
+          }
+          break;
+
+        case "classification":
+          if (data.verdict === "drift") {
+            setFocusStatus("checking");
+            setDriftCount(data.drift_count || 0);
+            const app = data.window?.split(" - ")?.[0] || "another app";
+            setDriftTriggers((prev) => [...prev, app]);
+          } else if (data.verdict === "relevant") {
+            setFocusStatus("focused");
+          }
+          break;
+
+        case "nudge":
+          setFocusStatus("drifted");
+          const nudgeType = data.nudge_type || "drift";
+          setNudge({
+            type: nudgeType === "speak" ? "drift"
+              : nudgeType === "ask" ? "ask"
+              : nudgeType === "suggest_break" ? "suggest_break"
+              : nudgeType === "silent_drift" ? "silent_drift"
+              : nudgeType === "task_initiation" ? "task_initiation"
+              : "drift",
+            message: data.message || "",
+            options: data.options || [],
+          });
+          break;
+
+        case "break_started":
+          setScreen("break");
+          break;
+
+        case "break_ended":
+          setFocusStatus("focused");
+          setScreen("focusing");
+          break;
+
+        case "session_ended":
+          if (data.summary) {
+            setSummaryData(data.summary);
+          }
+          setScreen("summary");
+          break;
       }
-    }, 15000);
-    return () => clearTimeout(t);
+    };
+
+    ws.onclose = () => {
+      console.log("[WS] Disconnected");
+    };
+
+    return () => {
+      ws.close();
+      wsRef.current = null;
+    };
   }, [screen]);
 
-  const handleStartSession = (t: string, d: number) => {
+  // Send action to backend via WebSocket
+  const sendAction = (action: string) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ action }));
+    }
+  };
+
+  const handleStartSession = async (t: string, d: number) => {
     setTask(t);
     setDurationMin(d);
     setScreen("dnd");
   };
 
-  const handleDNDContinue = () => {
+  const handleDNDContinue = async () => {
+    try {
+      const res = await fetch(`${BACKEND_URL}/session/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          task,
+          duration: durationMin,
+          dnd: false,
+          expected_notifications: "",
+        }),
+      });
+      const data = await res.json();
+      console.log("[SESSION] Started:", data);
+    } catch (e) {
+      console.error("[SESSION] Failed to start:", e);
+    }
     setScreen("focusing");
   };
 
   const handlePullBack = () => {
-    setNudge("none");
+    setNudge({ type: "none", message: "", options: [] });
     setFocusStatus("focused");
+    sendAction("pull_me_back");
   };
 
   const handleTakeBreak = () => {
-    setNudge("none");
+    setNudge({ type: "none", message: "", options: [] });
+    sendAction("taking_break");
     setScreen("break");
+  };
+
+  const handleDismiss = () => {
+    setNudge({ type: "none", message: "", options: [] });
+    setFocusStatus("focused");
+    sendAction("got_it");
   };
 
   const handleBreakEnd = () => {
@@ -111,8 +195,17 @@ const Index = () => {
     setScreen("focusing");
   };
 
-  const handleEndSession = () => {
-    if (driftTimer.current) clearTimeout(driftTimer.current);
+  const handleEndSession = async () => {
+    try {
+      const res = await fetch(`${BACKEND_URL}/session/end`, { method: "POST" });
+      const data = await res.json();
+      console.log("[SESSION] Ended:", data);
+      if (data.summary) {
+        setSummaryData(data.summary);
+      }
+    } catch (e) {
+      console.error("[SESSION] Failed to end:", e);
+    }
     setScreen("summary");
   };
 
@@ -129,31 +222,42 @@ const Index = () => {
     setElapsed(0);
     setIsPaused(false);
     setFocusStatus("focused");
-    setNudge("none");
+    setNudge({ type: "none", message: "", options: [] });
     setDriftCount(0);
     setDriftTriggers([]);
     setTimeline([]);
     setLongestStreak(0);
+    setSummaryData(null);
     currentStreak.current = 0;
   };
 
-  const finalTimeline = timeline.length > 0 ? timeline : [
-    ...Array.from({ length: 25 }, (_, i) => ({ minute: i + 1, focused: true, type: "focus" as const })),
-    { minute: 26, focused: false, type: "drift" as const },
-    ...Array.from({ length: 12 }, (_, i) => ({ minute: 27 + i, focused: true, type: "focus" as const })),
-    { minute: 39, focused: false, type: "drift" as const },
-    { minute: 40, focused: false, type: "drift" as const },
-    ...Array.from({ length: 38 }, (_, i) => ({ minute: 41 + i, focused: true, type: "focus" as const })),
-    { minute: 79, focused: false, type: "drift" as const },
-    ...Array.from({ length: 23 }, (_, i) => ({ minute: 80 + i, focused: true, type: "focus" as const })),
-  ];
-
   const trigger = topTrigger();
+
+  const finalTimeline = summaryData?.timeline?.length > 0
+    ? summaryData.timeline.map((seg: any, i: number) => ({
+        minute: i + 1,
+        focused: seg.type === "focused",
+        type: seg.type === "focused" ? "focus" as const : seg.type === "break" ? "break" as const : "drift" as const,
+      }))
+    : timeline.length > 0 ? timeline : [
+        ...Array.from({ length: 25 }, (_, i) => ({ minute: i + 1, focused: true, type: "focus" as const })),
+        { minute: 26, focused: false, type: "drift" as const },
+        ...Array.from({ length: 12 }, (_, i) => ({ minute: 27 + i, focused: true, type: "focus" as const })),
+        { minute: 39, focused: false, type: "drift" as const },
+        { minute: 40, focused: false, type: "drift" as const },
+        ...Array.from({ length: 38 }, (_, i) => ({ minute: 41 + i, focused: true, type: "focus" as const })),
+        { minute: 79, focused: false, type: "drift" as const },
+        ...Array.from({ length: 23 }, (_, i) => ({ minute: 80 + i, focused: true, type: "focus" as const })),
+      ];
 
   return (
     <div className="min-h-screen bg-background">
       <BackgroundBlob />
       <AnimatePresence mode="wait">
+        {screen === "welcome" && (
+          <WelcomeScreen key="welcome" onComplete={() => setScreen("start")} />
+        )}
+
         {screen === "start" && (
           <SessionStart key="start" onStart={handleStartSession} />
         )}
@@ -175,30 +279,24 @@ const Index = () => {
               onEnd={handleEndSession}
             />
             <AnimatePresence>
-              {nudge === "drift" && (
+              {nudge.type !== "none" && nudge.type !== "initiation" && (
                 <NudgeOverlay
-                  key="drift-nudge"
-                  type="drift"
-                  source={driftTriggers[driftTriggers.length - 1]}
+                  key="nudge"
+                  type={nudge.type as any}
+                  message={nudge.message}
+                  options={nudge.options}
                   onTakeBreak={handleTakeBreak}
                   onPullBack={handlePullBack}
-                  onDismiss={handlePullBack}
+                  onDismiss={handleDismiss}
                 />
               )}
-              {nudge === "notification" && (
-                <NudgeOverlay
-                  key="notif-nudge"
-                  type="notification"
-                  source="Slack"
-                  onTakeBreak={handleTakeBreak}
-                  onPullBack={handlePullBack}
-                  onDismiss={handlePullBack}
-                />
-              )}
-              {nudge === "initiation" && (
+              {nudge.type === "initiation" && (
                 <TaskInitiationNudge
                   key="init-nudge"
-                  onReady={() => setNudge("none")}
+                  onReady={() => {
+                    setNudge({ type: "none", message: "", options: [] });
+                    sendAction("im_ready");
+                  }}
                 />
               )}
             </AnimatePresence>
@@ -215,12 +313,12 @@ const Index = () => {
           <SessionSummary
             key="summary"
             data={{
-              totalFocusedSeconds: elapsed || 6120,
-              totalSessionSeconds: elapsed || 7200,
-              driftCount: driftCount || 4,
-              longestStreakMinutes: longestStreak || 38,
-              topDriftTrigger: trigger.name || "YouTube",
-              topDriftTriggerCount: trigger.count || 3,
+              totalFocusedSeconds: summaryData ? Math.round(summaryData.focused_time_min * 60) : elapsed || 6120,
+              totalSessionSeconds: summaryData ? Math.round(summaryData.total_time_min * 60) : elapsed || 7200,
+              driftCount: summaryData?.drift_count ?? driftCount ?? 4,
+              longestStreakMinutes: summaryData ? Math.round(summaryData.longest_streak_min) : longestStreak || 38,
+              topDriftTrigger: summaryData?.top_drift_trigger || trigger.name || "YouTube",
+              topDriftTriggerCount: summaryData?.top_drift_trigger_count || trigger.count || 3,
               avgReturnTimeMinutes: 2,
               timeline: finalTimeline,
             }}

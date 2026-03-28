@@ -17,6 +17,7 @@ import time
 import asyncio
 import subprocess
 import threading
+import cv2
 from datetime import datetime
 from collections import Counter
 from typing import Optional
@@ -25,11 +26,98 @@ from elevenlabs.play import play
 from pynput import mouse, keyboard as kb
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from google import genai
 from dotenv import load_dotenv
 load_dotenv()
+
+from activity_monitor import ActivityDetector, download_models, draw_hand_landmarks, draw_pose_landmarks, draw_status_overlay, blur_background
+
+# ============================================================
+# WEBCAM ACTIVITY MONITOR (MediaPipe, runs in background)
+# ============================================================
+print("[CAMERA] Downloading MediaPipe models...")
+download_models()
+print("[CAMERA] Models ready.")
+
+camera_lock = threading.Lock()
+camera_cap = None
+activity_detector = None
+latest_activity = {"activity": "initializing", "confidence": 0.0, "details": {}}
+latest_jpeg_frame = None
+camera_running = False
+
+
+def start_camera():
+    global camera_cap, activity_detector, camera_running
+    with camera_lock:
+        if camera_running:
+            return True
+        camera_cap = cv2.VideoCapture(0)
+        if not camera_cap.isOpened():
+            print("[CAMERA] ERROR: Cannot open webcam")
+            return False
+        camera_cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        camera_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        camera_cap.set(cv2.CAP_PROP_FPS, 15)
+        activity_detector = ActivityDetector()
+        camera_running = True
+        print("[CAMERA] Webcam started")
+    return True
+
+
+def stop_camera():
+    global camera_cap, activity_detector, camera_running
+    with camera_lock:
+        camera_running = False
+        if camera_cap:
+            camera_cap.release()
+            camera_cap = None
+        if activity_detector:
+            activity_detector.cleanup()
+            activity_detector = None
+        print("[CAMERA] Webcam released")
+
+
+def camera_loop():
+    global latest_activity, latest_jpeg_frame, camera_running
+    last_sent_activity = ""
+    while camera_running:
+        with camera_lock:
+            if not camera_cap or not camera_cap.isOpened():
+                break
+            ret, frame = camera_cap.read()
+        if not ret:
+            time.sleep(0.1)
+            continue
+        frame = cv2.flip(frame, 1)
+        activity, confidence, details, hand_result, pose_result, face_result = activity_detector.detect(frame)
+        latest_activity = {"activity": activity, "confidence": confidence, "details": details}
+        pose_lms = pose_result.pose_landmarks[0] if pose_result.pose_landmarks else None
+        frame = blur_background(frame, pose_lms)
+        if hand_result.hand_landmarks:
+            for hand_lms in hand_result.hand_landmarks:
+                draw_hand_landmarks(frame, hand_lms)
+        if pose_result.pose_landmarks:
+            draw_pose_landmarks(frame, pose_result.pose_landmarks[0])
+        frame = draw_status_overlay(frame, activity, confidence, details, activity_detector)
+        _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+        latest_jpeg_frame = jpeg.tobytes()
+        if activity != last_sent_activity and activity not in ("initializing", "checking", "unknown"):
+            print(f"  [CAMERA] Activity: {activity} ({confidence:.0%})")
+            last_sent_activity = activity
+        time.sleep(0.05)
+
+
+def generate_mjpeg():
+    while camera_running:
+        if latest_jpeg_frame:
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + latest_jpeg_frame + b'\r\n')
+        time.sleep(0.05)
+
 
 # ============================================================
 # ACTIVITY TRACKING (keyboard + mouse via pynput)
@@ -802,6 +890,31 @@ def build_session_summary() -> dict:
 
 
 # ============================================================
+# CAMERA ENDPOINTS
+# ============================================================
+@app.get("/video_feed")
+async def video_feed():
+    return StreamingResponse(generate_mjpeg(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+@app.get("/activity")
+async def get_activity():
+    return latest_activity
+
+@app.post("/camera/start")
+async def start_camera_endpoint():
+    success = start_camera()
+    if success:
+        threading.Thread(target=camera_loop, daemon=True).start()
+        return {"status": "camera_started"}
+    return {"error": "Could not open webcam"}
+
+@app.post("/camera/stop")
+async def stop_camera_endpoint():
+    stop_camera()
+    return {"status": "camera_stopped"}
+
+
+# ============================================================
 # REST ENDPOINTS
 # ============================================================
 @app.get("/")
@@ -931,6 +1044,10 @@ if __name__ == "__main__":
     print("  POST /session/end    -- end session, get summary")
     print("  GET  /session/status -- check current status")
     print("  WS   /ws             -- real-time updates to frontend")
+    print("  GET  /video_feed     -- MJPEG webcam stream")
+    print("  GET  /activity       -- current activity status")
+    print("  POST /camera/start   -- start webcam monitoring")
+    print("  POST /camera/stop    -- stop webcam monitoring")
     print("=" * 60)
 
     uvicorn.run(app, host="0.0.0.0", port=8000)
