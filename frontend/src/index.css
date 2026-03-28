@@ -1,0 +1,166 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 30 20% 95%;
+    --foreground: 0 0% 24%;
+
+    --card: 40 20% 98%;
+    --card-foreground: 0 0% 24%;
+
+    --popover: 40 20% 98%;
+    --popover-foreground: 0 0% 24%;
+
+    --primary: 149 21% 45%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 30 20% 92%;
+    --secondary-foreground: 0 0% 24%;
+
+    --muted: 30 15% 93%;
+    --muted-foreground: 0 0% 54%;
+
+    --accent: 27 50% 64%;
+    --accent-foreground: 30 25% 97%;
+
+    --destructive: 18 45% 56%;
+    --destructive-foreground: 30 25% 97%;
+
+    --border: 150 15% 80%;
+    --input: 150 15% 80%;
+    --ring: 149 21% 45%;
+
+    --radius: 0.75rem;
+
+    --sage: 149 21% 45%;
+    --sage-light: 155 12% 92%;
+    --sage-hover: 150 15% 91%;
+    --amber: 27 50% 64%;
+    --amber-light: 27 50% 92%;
+    --terracotta: 18 45% 56%;
+    --terracotta-light: 18 45% 92%;
+    --warm-white: 30 20% 95%;
+    --warm-gray: 0 0% 24%;
+
+    --sidebar-background: 30 25% 97%;
+    --sidebar-foreground: 0 0% 24%;
+    --sidebar-primary: 153 20% 45%;
+    --sidebar-primary-foreground: 30 25% 97%;
+    --sidebar-accent: 30 20% 92%;
+    --sidebar-accent-foreground: 0 0% 24%;
+    --sidebar-border: 30 15% 88%;
+    --sidebar-ring: 153 20% 45%;
+  }
+
+  .dark {
+    --background: 240 20% 10%;
+    --foreground: 30 15% 90%;
+
+    --card: 240 18% 14%;
+    --card-foreground: 30 15% 90%;
+
+    --popover: 240 18% 14%;
+    --popover-foreground: 30 15% 90%;
+
+    --primary: 153 18% 42%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 240 15% 18%;
+    --secondary-foreground: 30 15% 90%;
+
+    --muted: 240 15% 18%;
+    --muted-foreground: 30 10% 60%;
+
+    --accent: 27 45% 55%;
+    --accent-foreground: 240 20% 10%;
+
+    --destructive: 18 40% 48%;
+    --destructive-foreground: 240 20% 10%;
+
+    --border: 240 15% 20%;
+    --input: 240 15% 20%;
+    --ring: 153 18% 42%;
+
+    --sage: 153 18% 42%;
+    --sage-light: 155 15% 18%;
+    --sage-hover: 153 15% 22%;
+    --amber: 27 45% 55%;
+    --amber-light: 27 45% 18%;
+    --terracotta: 18 40% 48%;
+    --terracotta-light: 18 40% 18%;
+    --warm-white: 240 20% 10%;
+    --warm-gray: 30 15% 90%;
+
+    --sidebar-background: 240 20% 10%;
+    --sidebar-foreground: 30 15% 90%;
+    --sidebar-primary: 153 18% 42%;
+    --sidebar-primary-foreground: 240 20% 10%;
+    --sidebar-accent: 240 15% 18%;
+    --sidebar-accent-foreground: 30 15% 90%;
+    --sidebar-border: 240 15% 20%;
+    --sidebar-ring: 153 18% 42%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-size: 17px;
+    line-height: 1.6;
+  }
+}
+
+@layer utilities {
+  .text-sage { color: hsl(var(--sage)); }
+  .text-amber { color: hsl(var(--amber)); }
+  .text-terracotta { color: hsl(var(--terracotta)); }
+  .bg-sage { background-color: hsl(var(--sage)); }
+  .bg-sage-light { background-color: hsl(var(--sage-light)); }
+  .bg-sage-hover { background-color: hsl(var(--sage-hover)); }
+  .bg-amber { background-color: hsl(var(--amber)); }
+  .bg-amber-light { background-color: hsl(var(--amber-light)); }
+  .bg-terracotta { background-color: hsl(var(--terracotta)); }
+  .bg-terracotta-light { background-color: hsl(var(--terracotta-light)); }
+}
+
+/* Global gradient background blob */
+.anchor-bg-blob {
+  position: fixed;
+  top: -20%;
+  left: -10%;
+  width: 80%;
+  height: 80%;
+  background: radial-gradient(ellipse at 30% 30%, hsl(var(--sage) / 0.15), transparent 60%),
+              radial-gradient(ellipse at 70% 70%, hsl(27 50% 80% / 0.12), transparent 60%);
+  filter: blur(80px);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Primary action button style */
+.btn-primary-action {
+  background-color: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  transition: all 0.2s ease;
+}
+.btn-primary-action:hover {
+  transform: scale(1.02);
+  opacity: 0.95;
+}
+.btn-primary-action:active {
+  transform: scale(0.98);
+}
+.btn-primary-action:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  transform: none;
+}
