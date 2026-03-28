@@ -7,13 +7,13 @@ NO video is recorded -- frames are processed for landmarks then discarded.
 
 import os
 import time
-import math
 import urllib.request
 import cv2
 import numpy as np
 import mediapipe as mp
 from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision
+from ultralytics import YOLO
 
 # ============================================================
 # MODEL DOWNLOADS
@@ -83,6 +83,13 @@ class ActivityDetector:
         self.activity_start_time = time.time()
         self.idle_start = None
 
+        # YOLO phone detector (yolov8n — tiny, fast, runs locally)
+        print("[YOLO] Loading YOLOv8n model...")
+        self.yolo = YOLO("yolov8n.pt")  # downloads ~6MB on first run
+        self.yolo_phone_detected = False
+        self.yolo_frame_counter = 0
+        print("[YOLO] Model ready.")
+
     def detect(self, frame):
         """Run all three landmarkers and classify activity."""
         ts = int(time.time() * 1000)
@@ -96,6 +103,12 @@ class ActivityDetector:
         hand_result = self.hand_landmarker.detect_for_video(mp_image, ts)
         pose_result = self.pose_landmarker.detect_for_video(mp_image, ts)
         face_result = self.face_landmarker.detect_for_video(mp_image, ts)
+
+        # Run YOLO every 3 frames to stay fast
+        self.yolo_frame_counter += 1
+        if self.yolo_frame_counter % 3 == 0:
+            results = self.yolo(frame, verbose=False, classes=[67])  # 67 = cell phone
+            self.yolo_phone_detected = len(results[0].boxes) > 0
 
         activity, confidence, details = self._classify(hand_result, pose_result, face_result)
 
@@ -114,6 +127,20 @@ class ActivityDetector:
         details["hands_detected"] = len(hand_result.hand_landmarks) if has_hands else 0
         details["pose_detected"] = has_pose
         details["face_detected"] = has_face
+        details["phone_visible"] = self.yolo_phone_detected
+
+        # Hand raise: any wrist above 40% of frame height
+        hand_raised = False
+        if has_hands:
+            for hand_lms in hand_result.hand_landmarks:
+                if hand_lms[0].y < 0.40:  # wrist in upper 40%
+                    hand_raised = True
+                    break
+        details["hand_raised"] = hand_raised
+
+        # ── YOLO is ground truth: phone object seen in frame → done ──
+        if self.yolo_phone_detected:
+            return "phone", 0.95, details
 
         # No person visible
         if not has_pose and not has_face:
@@ -125,29 +152,29 @@ class ActivityDetector:
 
         self.idle_start = None
 
-        # Check if looking down (phone use indicator)
+        # ── Pose-only fallback: face left frame = looking way down ──
+        if has_pose and not has_face:
+            pose_lms = pose_result.pose_landmarks[0]
+            pose_nose = pose_lms[0]
+            left_shoulder = pose_lms[11]
+            right_shoulder = pose_lms[12]
+            shoulder_y = (left_shoulder.y + right_shoulder.y) / 2
+            nose_rel = pose_nose.y - shoulder_y
+            details["pose_nose_rel"] = round(nose_rel, 3)
+            if nose_rel > -0.05:
+                details["phone_candidate"] = True
+                return "phone", 0.70, details
+
+        # Head tilt — face still in frame (YOLO already handles phone detection above)
         if has_face:
             face_lms = face_result.face_landmarks[0]
-            nose = face_lms[1]  # nose tip
-            chin = face_lms[152]  # chin
-            forehead = face_lms[10]  # forehead
-
+            nose = face_lms[1]
+            chin = face_lms[152]
+            forehead = face_lms[10]
             head_tilt = chin.y - forehead.y
             details["head_tilt"] = round(head_tilt, 3)
 
-            if nose.y > 0.65 and head_tilt > 0.15:
-                if has_hands and len(hand_result.hand_landmarks) >= 1:
-                    # Check if hands are in phone-holding position (lower frame)
-                    for hand_lms in hand_result.hand_landmarks:
-                        wrist = hand_lms[0]
-                        if wrist.y > 0.5:
-                            # Check for scrolling motion (thumb extended, fingers curled)
-                            thumb_tip = hand_lms[4]
-                            index_tip = hand_lms[8]
-                            dist = math.sqrt((thumb_tip.x - index_tip.x)**2 + (thumb_tip.y - index_tip.y)**2)
-                            if dist > 0.08:
-                                return "phone_scrolling", 0.85, details
-                            return "phone", 0.8, details
+            if head_tilt > 0.10 and nose.y > 0.50:
                 return "looking_down", 0.7, details
 
         # Check hand positions for typing
@@ -247,25 +274,47 @@ def draw_status_overlay(frame, activity, confidence, details, detector):
 
 def blur_background(frame, pose_landmarks):
     """Blur background, keep person sharp. Uses pose landmarks for person mask."""
-    if pose_landmarks is None:
-        return cv2.GaussianBlur(frame, (31, 31), 15)
-
     h, w = frame.shape[:2]
+
+    if pose_landmarks is None:
+        # No pose — blur everything
+        return cv2.GaussianBlur(frame, (55, 55), 20)
+
     mask = np.zeros((h, w), dtype=np.uint8)
 
-    # Get bounding box from pose landmarks
-    xs = [lm.x * w for lm in pose_landmarks]
-    ys = [lm.y * h for lm in pose_landmarks]
-    cx, cy = int(np.mean(xs)), int(np.mean(ys))
-    rx = int((max(xs) - min(xs)) * 0.7)
-    ry = int((max(ys) - min(ys)) * 0.6)
-    rx = max(rx, 80)
-    ry = max(ry, 120)
+    # Build convex hull from ALL visible pose landmarks for a tighter person shape
+    pts = []
+    for lm in pose_landmarks:
+        # Only use landmarks with reasonable visibility (not behind body)
+        if hasattr(lm, 'visibility') and lm.visibility < 0.3:
+            continue
+        pts.append([int(lm.x * w), int(lm.y * h)])
 
-    cv2.ellipse(mask, (cx, cy), (rx, ry), 0, 0, 360, 255, -1)
-    mask = cv2.GaussianBlur(mask, (51, 51), 30)
+    if len(pts) >= 3:
+        pts_arr = np.array(pts, dtype=np.int32)
+        hull = cv2.convexHull(pts_arr)
+        # Expand hull outward by ~15% to include clothing/hair edges
+        cx_h = int(np.mean(pts_arr[:, 0]))
+        cy_h = int(np.mean(pts_arr[:, 1]))
+        expanded = []
+        for pt in hull[:, 0]:
+            dx, dy = pt[0] - cx_h, pt[1] - cy_h
+            expanded.append([cx_h + int(dx * 1.35), cy_h + int(dy * 1.35)])
+        expanded = np.array(expanded, dtype=np.int32)
+        cv2.fillConvexPoly(mask, expanded, 255)
+    else:
+        # Fallback: ellipse from bounding box
+        xs = [lm.x * w for lm in pose_landmarks]
+        ys = [lm.y * h for lm in pose_landmarks]
+        cx, cy = int(np.mean(xs)), int(np.mean(ys))
+        rx = max(int((max(xs) - min(xs)) * 0.85), 100)
+        ry = max(int((max(ys) - min(ys)) * 0.80), 140)
+        cv2.ellipse(mask, (cx, cy), (rx, ry), 0, 0, 360, 255, -1)
 
-    blurred = cv2.GaussianBlur(frame, (31, 31), 15)
+    # Soft feathered edge so the blend is seamless
+    mask = cv2.GaussianBlur(mask, (61, 61), 35)
+
+    blurred = cv2.GaussianBlur(frame, (55, 55), 20)
     mask_3ch = cv2.merge([mask, mask, mask]).astype(np.float32) / 255.0
     result = (frame.astype(np.float32) * mask_3ch + blurred.astype(np.float32) * (1 - mask_3ch)).astype(np.uint8)
 

@@ -4,17 +4,32 @@ import { Anchor } from "lucide-react";
 
 interface Props {
   onComplete: () => void;
+  onGreet?: () => void;
 }
 
 const BACKEND_URL = "http://localhost:8000";
 
-const WelcomeScreen = ({ onComplete }: Props) => {
+const ACTIVITY_COLORS: Record<string, string> = {
+  focused: "#6fcf97",
+  typing: "#6fcf97",
+  phone: "#eb5757",
+  phone_scrolling: "#eb5757",
+  looking_down: "#f2994a",
+  idle: "#56ccf2",
+  away: "#828282",
+  looking_away: "#56ccf2",
+};
+
+const WelcomeScreen = ({ onComplete, onGreet }: Props) => {
   const [cameraReady, setCameraReady] = useState(false);
   const [greeting, setGreeting] = useState("");
   const [showGreeting, setShowGreeting] = useState(false);
   const [countdown, setCountdown] = useState(10);
   const [fadeOut, setFadeOut] = useState(false);
+  const [activity, setActivity] = useState<{ activity: string; confidence: number; details: Record<string, unknown> } | null>(null);
+  const [greeted, setGreeted] = useState(false);
   const imgRef = useRef<HTMLImageElement>(null);
+  const greetedRef = useRef(false);
 
   // Start camera on mount
   useEffect(() => {
@@ -29,6 +44,52 @@ const WelcomeScreen = ({ onComplete }: Props) => {
     };
     startCamera();
   }, []);
+
+  const triggerGreet = () => {
+    if (greetedRef.current) return;
+    greetedRef.current = true;
+    setGreeted(true);
+    onGreet?.();
+    // Give Smiski 2.5s to walk in and say hi, then transition
+    setTimeout(() => {
+      setFadeOut(true);
+      setTimeout(() => onComplete(), 800);
+    }, 2500);
+  };
+
+  // Poll activity detection every second + detect hand raise
+  useEffect(() => {
+    if (!cameraReady) return;
+    const poll = async () => {
+      try {
+        const res = await fetch(`${BACKEND_URL}/activity`);
+        const data = await res.json();
+        setActivity(data);
+        if (data.details?.hand_raised) triggerGreet();
+      } catch {}
+    };
+    poll();
+    const interval = setInterval(poll, 1000);
+    return () => clearInterval(interval);
+  }, [cameraReady]);
+
+  // Speech recognition — listen for "hi" / "hello" / "hey"
+  useEffect(() => {
+    if (!cameraReady) return;
+    const SpeechRecognition = (window as unknown as { SpeechRecognition?: unknown; webkitSpeechRecognition?: unknown }).SpeechRecognition
+      || (window as unknown as { webkitSpeechRecognition?: unknown }).webkitSpeechRecognition;
+    if (!SpeechRecognition) return;
+    const recognition = new (SpeechRecognition as new () => { continuous: boolean; interimResults: boolean; onresult: ((e: { results: { transcript: string }[][] }) => void) | null; start: () => void; onerror: () => void })();
+    recognition.continuous = true;
+    recognition.interimResults = false;
+    recognition.onresult = (e) => {
+      const transcript = e.results[e.results.length - 1][0].transcript.toLowerCase().trim();
+      if (/\b(hi|hello|hey)\b/.test(transcript)) triggerGreet();
+    };
+    recognition.onerror = () => {};
+    recognition.start();
+    return () => { try { (recognition as unknown as { stop: () => void }).stop(); } catch {} };
+  }, [cameraReady]);
 
   // Show greeting after camera is ready
   useEffect(() => {
@@ -93,11 +154,62 @@ const WelcomeScreen = ({ onComplete }: Props) => {
 
           <div className="absolute bottom-0 left-0 right-0 h-32 bg-gradient-to-t from-background/90 to-transparent" />
 
+          {/* Wave-back reaction when greeted */}
+          <AnimatePresence>
+            {greeted && (
+              <motion.div
+                initial={{ scale: 0, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0, opacity: 0 }}
+                className="absolute inset-0 flex items-center justify-center pointer-events-none"
+              >
+                <motion.span
+                  className="text-6xl"
+                  animate={{ rotate: [0, 20, -10, 20, 0] }}
+                  transition={{ duration: 0.8, repeat: 2 }}
+                >
+                  👋
+                </motion.span>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
           {/* Privacy badge */}
           <div className="absolute top-4 right-4 bg-card/80 backdrop-blur-sm rounded-full px-3 py-1.5 flex items-center gap-1.5 border border-border">
             <div className="h-2 w-2 rounded-full bg-sage animate-pulse" />
             <span className="text-xs text-muted-foreground">No recording</span>
           </div>
+
+          {/* Live detection badge */}
+          {activity && (
+            <div className="absolute top-4 left-4 bg-black/70 backdrop-blur-sm rounded-xl px-3 py-2 border border-white/10 space-y-1 min-w-[160px]">
+              <div className="flex items-center gap-2">
+                <div
+                  className="h-2.5 w-2.5 rounded-full flex-shrink-0"
+                  style={{ backgroundColor: ACTIVITY_COLORS[activity.activity] ?? "#aaa" }}
+                />
+                <span className="text-xs font-semibold text-white uppercase tracking-wide">
+                  {activity.activity.replace("_", " ")}
+                </span>
+                <span className="text-xs text-white/50 ml-auto">
+                  {Math.round(activity.confidence * 100)}%
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-x-3 gap-y-0.5">
+                {activity.details.phone_visible !== undefined && (
+                  <span className={`text-[10px] ${activity.details.phone_visible ? "text-red-400 font-bold" : "text-white/40"}`}>
+                    📱 {activity.details.phone_visible ? "PHONE DETECTED" : "no phone"}
+                  </span>
+                )}
+                {typeof activity.details.hands_detected === "number" && (
+                  <span className="text-[10px] text-white/40">hands: {activity.details.hands_detected as number}</span>
+                )}
+                {typeof activity.details.head_tilt === "number" && (
+                  <span className="text-[10px] text-white/40">tilt: {(activity.details.head_tilt as number).toFixed(2)}</span>
+                )}
+              </div>
+            </div>
+          )}
         </motion.div>
 
         {/* Greeting text */}

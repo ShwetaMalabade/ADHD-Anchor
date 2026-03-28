@@ -18,6 +18,7 @@ import asyncio
 import subprocess
 import threading
 import cv2
+import numpy as np
 from datetime import datetime
 from collections import Counter
 from typing import Optional
@@ -33,7 +34,7 @@ from google import genai
 from dotenv import load_dotenv
 load_dotenv()
 
-from activity_monitor import ActivityDetector, download_models, draw_hand_landmarks, draw_pose_landmarks, draw_status_overlay, blur_background
+from activity_monitor import ActivityDetector, download_models, draw_hand_landmarks, draw_pose_landmarks, draw_status_overlay
 
 # ============================================================
 # WEBCAM ACTIVITY MONITOR (MediaPipe, runs in background)
@@ -95,8 +96,6 @@ def camera_loop():
         frame = cv2.flip(frame, 1)
         activity, confidence, details, hand_result, pose_result, face_result = activity_detector.detect(frame)
         latest_activity = {"activity": activity, "confidence": confidence, "details": details}
-        pose_lms = pose_result.pose_landmarks[0] if pose_result.pose_landmarks else None
-        frame = blur_background(frame, pose_lms)
         if hand_result.hand_landmarks:
             for hand_lms in hand_result.hand_landmarks:
                 draw_hand_landmarks(frame, hand_lms)
@@ -899,6 +898,17 @@ async def video_feed():
 @app.get("/activity")
 async def get_activity():
     return latest_activity
+
+@app.get("/debug_frame")
+async def debug_frame():
+    """Returns current frame as PNG for debugging (open in browser or curl > frame.png)"""
+    if latest_jpeg_frame is None:
+        return {"error": "No frame available yet"}
+    # Decode JPEG → re-encode as PNG for easier viewing
+    arr = np.frombuffer(latest_jpeg_frame, dtype=np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    _, png = cv2.imencode('.png', img)
+    return StreamingResponse(iter([png.tobytes()]), media_type="image/png")
 
 @app.post("/camera/start")
 async def start_camera_endpoint():
