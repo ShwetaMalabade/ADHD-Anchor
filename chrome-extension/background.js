@@ -103,39 +103,38 @@ const DISTRACTION_NAMES = {
   "discord.com": "Discord", "www.discord.com": "Discord",
 };
 
+function fireDistractNudge(tabId, host) {
+  const name = DISTRACTION_NAMES[host] || host;
+  sendToBackend({ type: "page_visit", hostname: host });
+  const nudgeEvent = {
+    type: "nudge",
+    source: name,
+    message: `Hey, you drifted to ${name}. Break or get back?`,
+  };
+  // Retry a few times since content script may not be injected yet
+  const trySend = (attempts) => {
+    if (attempts <= 0) return;
+    chrome.tabs.sendMessage(tabId, { type: "backend_event", payload: nudgeEvent })
+      .catch(() => setTimeout(() => trySend(attempts - 1), 800));
+  };
+  trySend(4);
+}
+
+// Standard navigation (new tab to YouTube)
 chrome.webNavigation.onCommitted.addListener((details) => {
-  if (details.frameId !== 0) return; // top-level frame only
+  if (details.frameId !== 0) return;
   try {
     const host = new URL(details.url).hostname;
-    if (!DISTRACTION_HOSTS.has(host)) return;
+    if (DISTRACTION_HOSTS.has(host)) fireDistractNudge(details.tabId, host);
+  } catch {}
+});
 
-    chrome.storage.local.get("sessionActive", ({ sessionActive }) => {
-      if (!sessionActive) return;
-
-      const name = DISTRACTION_NAMES[host] || host;
-
-      // Tell backend if connected
-      sendToBackend({ type: "page_visit", hostname: host, url: details.url });
-
-      // Local fallback — fires immediately regardless of backend
-      const nudgeEvent = {
-        type: "nudge",
-        source: name,
-        message: `Hey, you drifted to ${name}. Break or get back?`,
-      };
-      chrome.tabs.sendMessage(details.tabId, {
-        type: "backend_event",
-        payload: nudgeEvent,
-      }).catch(() => {
-        // Content script may not be ready yet — retry after a short delay
-        setTimeout(() => {
-          chrome.tabs.sendMessage(details.tabId, {
-            type: "backend_event",
-            payload: nudgeEvent,
-          }).catch(() => {});
-        }, 1500);
-      });
-    });
+// YouTube/SPA navigation (clicking links within YouTube)
+chrome.webNavigation.onHistoryStateUpdated.addListener((details) => {
+  if (details.frameId !== 0) return;
+  try {
+    const host = new URL(details.url).hostname;
+    if (DISTRACTION_HOSTS.has(host)) fireDistractNudge(details.tabId, host);
   } catch {}
 });
 
@@ -144,12 +143,9 @@ chrome.webNavigation.onCommitted.addListener((details) => {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   switch (msg.type) {
     case "page_report":
-      // Content script reporting its page on load
-      chrome.storage.local.get("sessionActive", ({ sessionActive }) => {
-        if (sessionActive && DISTRACTION_HOSTS.has(msg.hostname)) {
-          sendToBackend({ type: "page_visit", hostname: msg.hostname });
-        }
-      });
+      if (DISTRACTION_HOSTS.has(msg.hostname)) {
+        sendToBackend({ type: "page_visit", hostname: msg.hostname });
+      }
       break;
 
     case "user_action":
@@ -163,6 +159,30 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     case "get_state":
       chrome.storage.local.get(["sessionActive"], sendResponse);
       return true; // async response
+
+    case "pull_back_close_tab":
+      if (sender.tab && sender.tab.id) {
+        const distractionTabId = sender.tab.id;
+        // Search all tabs for the app (localhost:8080)
+        chrome.tabs.query({}, (allTabs) => {
+          const appTab = allTabs.find(t =>
+            t.url && (t.url.startsWith("http://localhost:8080") || t.url.startsWith("http://127.0.0.1:8080"))
+            && t.id !== distractionTabId
+          );
+          if (appTab) {
+            // Focus the existing app tab and close YouTube
+            chrome.tabs.update(appTab.id, { active: true });
+            chrome.windows.update(appTab.windowId, { focused: true });
+            chrome.tabs.remove(distractionTabId);
+          } else {
+            // No app tab open — open one and close YouTube
+            chrome.tabs.create({ url: "http://localhost:8080" }, () => {
+              chrome.tabs.remove(distractionTabId);
+            });
+          }
+        });
+      }
+      break;
 
     case "connect_ws":
       connectWS();

@@ -3,7 +3,7 @@
   "name": "ADHD Anchor",
   "version": "1.0",
   "description": "Your Smiski focus buddy — on every page you visit",
-  "permissions": ["tabs", "storage", "webNavigation", "activeTab"],
+  "permissions": ["tabs", "storage", "webNavigation", "activeTab", "scripting"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js"
@@ -11,6 +11,10 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
+      "exclude_matches": [
+        "http://localhost/*",
+        "http://127.0.0.1/*"
+      ],
       "js": ["content_script.js"],
       "css": ["smiski.css"],
       "run_at": "document_idle"

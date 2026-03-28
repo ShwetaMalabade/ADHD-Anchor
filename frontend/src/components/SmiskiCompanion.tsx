@@ -181,14 +181,14 @@ const SmiskiCompanion = ({
 
   // ── Effects ───────────────────────────────────────────────────────────────
 
-  // Mount greeting
+  // Mount greeting — delayed so it appears after the welcome screen fades
   useEffect(() => {
     if (hasGreeted.current) return;
     hasGreeted.current = true;
     setTimeout(() => {
       walkIn("Hi! I'm your focus buddy ✨ I'll keep you on track today");
       walkOut(5000);
-    }, 900);
+    }, 11500);
   }, []);
 
   // Session start

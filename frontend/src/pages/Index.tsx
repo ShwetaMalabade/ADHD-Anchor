@@ -15,7 +15,6 @@ type Screen = "welcome" | "start" | "dnd" | "focusing" | "break" | "summary" | "
 type FocusStatus = "focused" | "checking" | "drifted";
 type NudgeType = "none" | "drift" | "notification" | "initiation";
 
-const BACKEND_URL = "http://localhost:8000";
 const DRIFT_SOURCES = ["YouTube", "Reddit", "Twitter", "Instagram", "TikTok"];
 
 const Index = () => {
@@ -76,41 +75,24 @@ const Index = () => {
       ws.onmessage = (e) => {
         try {
           const data = JSON.parse(e.data);
-
           if (data.type === "nudge" || data.type === "phone_detected") {
+            const source = data.source || "something";
             setFocusStatus("drifted");
-            if (data.drift_count != null) {
-              setDriftCount(data.drift_count);
-            }
+            setDriftCount((c) => c + 1);
+            setDriftTriggers((prev) => [...prev, source]);
             nudgeCounter.current += 1;
             setActiveNudge({
-              text: data.message || "Hey, you drifted. Break or get back?",
+              text: data.message || `Hey, you drifted to ${source}. Break or get back?`,
               id: nudgeCounter.current,
             });
-          } else if (data.type === "status") {
-            setFocusStatus(data.value);
-          } else if (data.type === "classification") {
-            if (data.verdict === "drift") {
-              if (data.drift_count != null) setDriftCount(data.drift_count);
-              const appName = (data.window || "").split(" - ")[0].trim() || "Unknown";
-              setDriftTriggers((prev) => [...prev, appName]);
-            }
-          } else if (data.type === "break_started") {
-            setNudge("none");
-            setActiveNudge(null);
-            setScreen("break");
-          } else if (data.type === "break_ended") {
-            setFocusStatus("focused");
-            setScreen("focusing");
-          } else if (data.type === "session_ended") {
-            if (driftTimer.current) clearTimeout(driftTimer.current);
-            setScreen("summary");
           } else if (data.type === "wave_detected") {
             nudgeCounter.current += 1;
             setActiveNudge({
-              text: data.message || "Hey! Great to see you! Ready to crush this session?",
+              text: data.message || "Hey! 👋 Great to see you! Ready to crush this session?",
               id: nudgeCounter.current,
             });
+          } else if (data.type === "session_summary") {
+            handleEndSession();
           }
         } catch {}
       };
@@ -170,17 +152,13 @@ const Index = () => {
     setScreen("dnd");
   };
 
-  const handleDNDContinue = (dnd: boolean = true, expectedNotifications: string = "") => {
-    fetch(`${BACKEND_URL}/session/start`, {
+  const handleDNDContinue = () => {
+    // Tell backend to start session and begin drift monitoring
+    fetch("http://localhost:8000/session/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        task,
-        duration: durationMin,
-        dnd,
-        expected_notifications: expectedNotifications,
-      }),
-    }).catch((e) => console.warn("Backend session start failed:", e));
+      body: JSON.stringify({ task, duration_minutes: durationMin }),
+    }).catch(() => {}); // backend may not be running — that's ok
     setScreen("focusing");
   };
 
@@ -188,17 +166,11 @@ const Index = () => {
     setNudge("none");
     setFocusStatus("focused");
     setActiveNudge(null);
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ action: "pull_me_back" }));
-    }
   };
 
   const handleTakeBreak = () => {
     setNudge("none");
     setActiveNudge(null);
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ action: "taking_break" }));
-    }
     setScreen("break");
   };
 
@@ -209,7 +181,7 @@ const Index = () => {
 
   const handleEndSession = () => {
     if (driftTimer.current) clearTimeout(driftTimer.current);
-    fetch(`${BACKEND_URL}/session/end`, { method: "POST" }).catch(() => {});
+    fetch("http://localhost:8000/session/end", { method: "POST" }).catch(() => {});
     setScreen("summary");
   };
 
@@ -260,14 +232,7 @@ const Index = () => {
       />
       <AnimatePresence mode="wait">
         {screen === "welcome" && (
-          <WelcomeScreen
-            key="welcome"
-            onComplete={() => setScreen("start")}
-            onGreet={() => {
-              nudgeCounter.current += 1;
-              setActiveNudge({ text: "Hi! 👋 Come along with me, let's get focused!", id: nudgeCounter.current });
-            }}
-          />
+          <WelcomeScreen key="welcome" onComplete={() => setScreen("start")} />
         )}
 
         {screen === "start" && (

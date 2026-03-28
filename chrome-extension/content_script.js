@@ -237,7 +237,8 @@
 
   function handlePullBack() {
     if (alertExitTimer) clearTimeout(alertExitTimer);
-    sendAction("pull_back");
+    // Tell background to close this tab and focus the app
+    chrome.runtime.sendMessage({ type: "pull_back_close_tab" });
     walkOut();
   }
 
@@ -295,20 +296,36 @@
 
   // ── Report current page to background ────────────────────────────────────────
 
+  const currentHost = window.location.hostname;
+
+  const DISTRACTION_HOSTS_LOCAL = new Set([
+    "youtube.com", "www.youtube.com",
+    "reddit.com", "www.reddit.com",
+    "twitter.com", "www.twitter.com", "x.com",
+    "instagram.com", "www.instagram.com",
+    "tiktok.com", "www.tiktok.com",
+    "facebook.com", "www.facebook.com",
+    "netflix.com", "www.netflix.com",
+    "twitch.tv", "www.twitch.tv",
+    "hulu.com", "www.hulu.com",
+    "discord.com", "www.discord.com",
+  ]);
+
+  const isDistractionSite = DISTRACTION_HOSTS_LOCAL.has(currentHost);
+
   chrome.runtime.sendMessage({
     type: "page_report",
-    hostname: window.location.hostname,
+    hostname: currentHost,
   });
 
   // ── Greeting on first load ────────────────────────────────────────────────────
+  // Skip on distraction sites — the drift nudge from background.js shows instead
 
-  chrome.storage.local.get("sessionActive", ({ sessionActive }) => {
-    if (sessionActive) {
-      setTimeout(() => {
-        walkIn("Still on it 💪 I'm watching over you");
-        walkOut(4000);
-      }, 1200);
-    }
-  });
+  if (!isDistractionSite) {
+    setTimeout(() => {
+      walkIn("Still on it 💪 I'm watching over you");
+      walkOut(4000);
+    }, 1200);
+  }
 
 })();
