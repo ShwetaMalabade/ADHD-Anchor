@@ -1,0 +1,17 @@
+fastapi==0.135.2
+uvicorn==0.42.0
+google-genai==1.68.0
+elevenlabs==2.40.0
+pynput==1.8.1
+python-dotenv==1.2.2
+pydantic==2.12.5
+mediapipe==0.10.33
+opencv-python==4.13.0.92
+numpy==2.4.3
+langchain==1.2.13
+langchain-classic==1.0.3
+langchain-google-genai==4.2.1
+langchain-community==0.4.1
+langchain-core==1.2.23
+tavily-python==0.7.23
+websockets==16.0
