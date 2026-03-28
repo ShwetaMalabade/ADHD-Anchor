@@ -229,6 +229,7 @@ const Index = () => {
         onPullBack={handlePullBack}
         onEndSession={handleEndSession}
         sessionActive={screen === "focusing"}
+        suppressMountGreeting={screen === "welcome"}
       />
       <AnimatePresence mode="wait">
         {screen === "welcome" && (

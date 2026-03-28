@@ -166,7 +166,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         // Search all tabs for the app (localhost:8080)
         chrome.tabs.query({}, (allTabs) => {
           const appTab = allTabs.find(t =>
-            t.url && (t.url.startsWith("http://localhost:8080") || t.url.startsWith("http://127.0.0.1:8080"))
+            t.url && (t.url.startsWith("http://localhost:8080") || t.url.startsWith("http://localhost:8081") || t.url.startsWith("http://127.0.0.1:8080") || t.url.startsWith("http://127.0.0.1:8081"))
             && t.id !== distractionTabId
           );
           if (appTab) {
@@ -176,7 +176,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             chrome.tabs.remove(distractionTabId);
           } else {
             // No app tab open — open one and close YouTube
-            chrome.tabs.create({ url: "http://localhost:8080" }, () => {
+            chrome.tabs.create({ url: "http://localhost:8081" }, () => {
               chrome.tabs.remove(distractionTabId);
             });
           }

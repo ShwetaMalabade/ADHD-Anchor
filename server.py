@@ -33,6 +33,19 @@ from google import genai
 from dotenv import load_dotenv
 load_dotenv()
 
+# LangChain imports
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_classic.agents import create_tool_calling_agent, AgentExecutor
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.tools import tool
+
+# Tavily (optional -- works without it, better with it)
+try:
+    from langchain_community.tools.tavily_search import TavilySearchResults
+    TAVILY_AVAILABLE = os.getenv("TAVILY_API_KEY") is not None
+except ImportError:
+    TAVILY_AVAILABLE = False
+
 from activity_monitor import ActivityDetector, download_models, draw_hand_landmarks, draw_pose_landmarks, draw_status_overlay, blur_background
 
 # ============================================================
@@ -184,14 +197,44 @@ monitoring_task = None
 # WINDOW WATCHER (macOS)
 # ============================================================
 def get_active_window_title() -> str:
-    """Read the currently active window (Windows)"""
-    try:
-        import win32gui
-        hwnd = win32gui.GetForegroundWindow()
-        title = win32gui.GetWindowText(hwnd)
-        return title if title else "Unknown"
-    except Exception:
-        return "Unknown"
+    """Read the currently active window (macOS + Windows)"""
+    import platform
+    if platform.system() == "Darwin":
+        script = '''
+        tell application "System Events"
+            set frontApp to name of first application process whose frontmost is true
+            set frontAppName to name of first window of (first application process whose frontmost is true)
+            return frontApp & " - " & frontAppName
+        end tell
+        '''
+        try:
+            result = subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                return result.stdout.strip()
+            else:
+                fallback = '''
+                tell application "System Events"
+                    return name of first application process whose frontmost is true
+                end tell
+                '''
+                result2 = subprocess.run(
+                    ["osascript", "-e", fallback],
+                    capture_output=True, text=True, timeout=5
+                )
+                return result2.stdout.strip() if result2.returncode == 0 else "Unknown"
+        except:
+            return "Unknown"
+    else:
+        try:
+            import win32gui
+            hwnd = win32gui.GetForegroundWindow()
+            title = win32gui.GetWindowText(hwnd)
+            return title if title else "Unknown"
+        except Exception:
+            return "Unknown"
 
 
 # ============================================================
@@ -309,24 +352,25 @@ def get_history_text(last_n: int = 25) -> str:
 
 
 def anchor_agent_decide(new_event_summary: str) -> dict:
-    """The agent reads full history and decides what to do"""
+    """LangChain agent with 6 tools. Falls back to direct Gemini if LangChain fails."""
 
     add_observation(new_event_summary)
 
     # Progressive cooldown -- gets longer each time you ignore nudges
+    elapsed = round((time.time() - session_state["start_time"]) / 60, 1)
     recent_nudges = [o for o in observation_history
                      if o["type"] == "nudge"
-                     and o["elapsed_min"] >= round((time.time() - session_state["start_time"]) / 60, 1) - 5]
+                     and o["elapsed_min"] >= elapsed - 5]
     nudge_count_recent = len(recent_nudges)
 
     if nudge_count_recent >= 4:
-        cooldown = 300  # 5 min -- stop pushing, wait for them
+        cooldown = 300
     elif nudge_count_recent >= 3:
-        cooldown = 120  # 2 min -- back off significantly
+        cooldown = 120
     elif nudge_count_recent >= 2:
-        cooldown = 60   # 1 min -- give more space
+        cooldown = 60
     else:
-        cooldown = 30   # 30 sec -- standard
+        cooldown = 30
 
     if session_state.get("last_nudge_time"):
         since_nudge = time.time() - session_state["last_nudge_time"]
@@ -334,21 +378,12 @@ def anchor_agent_decide(new_event_summary: str) -> dict:
             return {"action": "stay_silent", "message": "", "options": [],
                     "reason": f"Cooldown: {cooldown}s ({nudge_count_recent} recent nudges)"}
 
-    # Don't intervene during breaks
     if session_state.get("break_active"):
         return {"action": "stay_silent", "message": "", "options": [], "reason": "On break"}
 
-    elapsed = round((time.time() - session_state["start_time"]) / 60, 1)
     history = get_history_text()
 
-    prompt = f"""You are Anchor, an AI body double with deep knowledge of ADHD neuroscience.
-You understand executive function depletion (Barkley's fuel tank model), time blindness,
-task initiation paralysis, hyperfocus risks, and the difference between good breaks and bad breaks.
-You are warm, supportive, and never accusatory -- like a knowledgeable friend who understands
-how ADHD brains work. You speak in 1-2 sentences MAX. You NEVER repeat the same phrasing twice
-in a session -- vary your tone, wording, and approach every time.
-
-SESSION INFO:
+    agent_input = f"""SESSION INFO:
 - Task: {session_state['task']}
 - Domain: {session_state['task_context'].get('domain', 'general')}
 - Duration: {session_state['duration_minutes']} min
@@ -366,97 +401,95 @@ FULL SESSION HISTORY:
 LATEST EVENT:
 {new_event_summary}
 
-Think through like an ADHD specialist:
-1. What is the user's current state? (focused, drifting, stuck, tired, overwhelmed, task initiation paralysis, hyperfocusing)
-2. WHY might they be in this state? (bored, avoiding something hard, tired brain, notification pulled them, genuinely stuck on the task)
-3. What does ADHD research say is the best intervention for this state?
-4. Should you speak, ask a question, suggest a break, or stay silent?
+Based on the above, diagnose why the user is in this state and choose the right tool(s).
+If the user is focused, use NO tools (stay silent).
+If this is the 1st drift, use NO tools (stay silent, let them self-correct).
+If drift_count >= 2, you MUST use a tool.
+If recent_nudges >= 3, use suggest_break -- nagging makes ADHD worse.
+All messages must reference the user's actual task: "{session_state['task']}" and actual apps from history.
+If ever_on_task is False, say "you're on [actual app] -- ready to open your [task]?"
+NEVER repeat phrasing from previous nudges in the history."""
 
-DRIFT RULES:
-- If user is FOCUSED and on a task-relevant app, STAY SILENT. Never interrupt good focus.
-- FIRST drift of the ENTIRE session: stay silent, give them a chance to self-correct.
-- SECOND drift: speak with a gentle nudge.
-- THIRD or more drift: you MUST intervene, even if they self-corrected previous times.
-- If drift_count >= 2, you MUST speak or ask. Do NOT stay silent on repeated drifts.
-
-WHEN TO SUGGEST A BREAK (use action "suggest_break"):
-- User has drifted 3+ times in the last 5 minutes -- their executive function tank is empty. Pushing them back to work won't help. They need to refuel.
-- User has been focused 25-40 minutes without a break -- proactively suggest a break BEFORE they crash. Don't wait for 40 minutes. ADHD brains deplete faster than neurotypical ones.
-- User was focused for a good stretch and then suddenly starts drifting repeatedly -- they hit a wall. Their brain is telling them it's out of fuel.
-- User keeps coming back to the task but drifting again within 2-3 minutes -- the drift-return-drift cycle means they need a real reset, not willpower.
-- If recent_nudges >= 3, ALWAYS suggest a break instead of another "get back to work" nudge. Nagging doesn't work with ADHD -- it makes them rebel more.
-
-BREAK GUIDANCE (include in your message when suggesting a break):
-- Recommend GOOD break activities: stand up, stretch, walk around, get water, step outside for fresh air, do some jumping jacks.
-- Specifically warn against phone/social media: "Try to stay off your phone -- your brain needs actual rest, not more screen time."
-- Keep breaks short: suggest 3-5 minutes, not 15-30. Shorter frequent breaks beat fewer long ones.
-- Research shows 5 minutes of physical movement restores more focus than 30 minutes of scrolling.
-
-TASK CHUNKING (when user seems stuck or overwhelmed):
-- When the user keeps drifting repeatedly or can't start, do NOT just say "get back to work."
-- Instead, suggest ONE tiny specific action: "Just fill in the first field" or "Just write one sentence" or "Just open the file and read the first paragraph."
-- Make the next step so small it feels effortless. The goal is to lower activation energy.
-- After a break ends, always ask "What's the ONE small thing you'll do first?" to help with re-initiation.
-
-NOTIFICATION HANDLING:
-- If the latest event says "NOTIFICATION PULL", be extra gentle. The user did NOT choose to open this app. Say something like "Looks like [app] pulled you away. Take a moment if needed, I'll be here."
-- If the drift app matches their expected notification source, be even more lenient.
-
-SILENT DRIFT:
-- If the latest event mentions "NO keyboard or mouse activity", the correct window is open but the user is not engaging. Ask gently: "Your screen has been quiet for a while. Still with me, or need a reset?"
-
-TASK-SPECIFIC RESPONSES (CRITICAL -- never give generic advice):
-- All your responses MUST be specific to the user's ACTUAL TASK: "{session_state['task']}". Never say generic things like "get back to work" or "return to your task."
-- Diagnose WHY they are drifting based on the session history pattern:
-  * DEPLETED: Was focused 20+ min then suddenly drifting → suggest break, their fuel tank is empty
-  * STUCK: Was working then hit a wall, started drifting → task chunking, ask what part is hard, suggest skipping to an easier section
-  * OVERWHELMED: Never started, bouncing between random apps → give them the smallest possible first step specific to their task
-  * BORED: Drifting to entertaining apps (Reddit, YouTube, games) → acknowledge the tedium of their specific task, give a mini-goal ("5 more fields then a break")
-  * AVOIDING: Keeps returning but drifting again within 1-2 min → name it gently, suggest skipping the hard part and coming back
-  * NOTIFICATION PULL: Fast window switch, messaging apps → suggest DND
-- For task chunking: suggest the SMALLEST possible next step specific to THEIR task. Examples:
-  * Filling forms: "Just fill in your name and email. Start with the easy fields."
-  * Reading paper: "Just read the abstract. 5 sentences. That's your only job right now."
-  * Coding: "Just write the function signature. Don't worry about the logic yet."
-  * Grading: "Just open the next submission. Don't grade it yet, just read it."
-  * Writing essay: "Just write one bad sentence. You can fix it later."
-- For boredom: acknowledge what specifically is tedious about THEIR task. "Forms are repetitive" or "Dense papers are hard to stay with" or "Grading the same rubric gets numbing."
-- For being stuck: suggest a task-specific strategy. Reading → "skip to the conclusion." Writing → "just write one bad sentence." Coding → "run what you have so far." Forms → "skip the hard question, do the easy ones first."
-- Use your knowledge of the task domain to give relevant suggestions.
-
-ACCURACY RULES:
-- CRITICAL: ONLY reference apps and windows that appear in the session history above. NEVER mention apps the user has not visited. Use the ACTUAL app name from the LATEST EVENT.
-- If ever_on_task is False, do NOT say "you left your task." They never opened it. Instead say "you're on [actual app] -- ready to open your [task]?"
-- If the latest event mentions sustained drift, acknowledge the TIME they've been there.
-- NEVER repeat the same phrasing you used earlier in the session. Check the history for your previous messages and use different words, different tone, different approach each time.
-
-Return ONLY JSON (no markdown, no backticks):
-{{
-    "action": "speak" or "ask" or "suggest_break" or "stay_silent",
-    "message": "what to say (empty if stay_silent)",
-    "options": ["button1", "button2"] or [],
-    "reason": "your internal reasoning (user won't see this)"
-}}"""
-
+    # Try LangChain agent first
     try:
-        response = gemini_client.models.generate_content(
-            model="gemini-2.5-flash", contents=prompt
-        )
+        print(f"  [AGENT] LangChain agent thinking...")
+        result = agent_executor.invoke({"input": agent_input})
+        output = result.get("output", "")
+
+        # Check if any tool was called by looking at intermediate steps
+        steps = result.get("intermediate_steps", [])
+        tool_used = False
+        message = ""
+        action = "stay_silent"
+
+        for step in steps:
+            tool_action, tool_result = step
+            tool_name = tool_action.tool
+            tool_used = True
+            print(f"  [AGENT] Tool used: {tool_name}")
+
+            if tool_name == "speak_to_user":
+                action = "speak"
+                message = tool_action.tool_input.get("message", "")
+            elif tool_name == "ask_user":
+                action = "ask"
+                message = tool_action.tool_input.get("question", "")
+            elif tool_name == "suggest_break":
+                action = "suggest_break"
+                activity = tool_action.tool_input.get("activity", "stretch and walk around")
+                duration = tool_action.tool_input.get("duration_minutes", 5)
+                message = f"Time for a {duration}-minute break. {activity}"
+            elif tool_name == "chunk_task":
+                action = "speak"
+                message = tool_action.tool_input.get("tiny_next_step", "")
+            elif tool_name == "suggest_dnd":
+                action = "speak"
+                message = tool_action.tool_input.get("reason", "")
+
+        if tool_used and message:
+            session_state["last_nudge_time"] = time.time()
+            add_observation(f"Anchor said: \"{message}\"", "nudge")
+            return {"action": action, "message": message, "options": [], "reason": f"LangChain agent (tools: {[s[0].tool for s in steps]})", "already_spoken": True}
+
+        if not tool_used:
+            print(f"  [AGENT] No tools used (staying silent)")
+            return {"action": "stay_silent", "message": "", "options": [], "reason": f"Agent chose silence: {output[:100]}"}
+
+        return {"action": "stay_silent", "message": "", "options": [], "reason": "No message from tools"}
+
+    except Exception as e:
+        print(f"  [AGENT] LangChain failed: {repr(e)[:100]}, falling back to direct Gemini")
+
+    # Fallback: direct Gemini call
+    try:
+        fallback_prompt = f"""You are Anchor, an ADHD-specialist AI body double. Warm, supportive, never accusatory. 1-2 sentences MAX.
+
+{agent_input}
+
+RULES:
+- 1st drift: stay_silent. 2nd drift: speak. 3rd+: MUST speak.
+- 3+ nudges recently: suggest_break instead of another nudge.
+- Messages specific to user's task. Never generic.
+- ONLY reference apps from the session history.
+
+Return ONLY JSON:
+{{"action": "speak" or "ask" or "suggest_break" or "stay_silent", "message": "what to say", "options": [], "reason": "internal reasoning"}}"""
+
+        response = gemini_client.models.generate_content(model="gemini-2.5-flash", contents=fallback_prompt)
         result_text = response.text.strip().replace("```json", "").replace("```", "").strip()
         decision = json.loads(result_text)
+        decision.setdefault("action", "stay_silent")
+        decision.setdefault("message", "")
+        decision.setdefault("options", [])
+        decision["reason"] = decision.get("reason", "") + " (fallback)"
 
-        decision["action"] = decision.get("action", "stay_silent")
-        decision["message"] = decision.get("message", "")
-        decision["options"] = decision.get("options", [])
-        decision["reason"] = decision.get("reason", "")
-
-        if decision["action"] != "stay_silent":
+        if decision["action"] != "stay_silent" and decision["message"]:
             session_state["last_nudge_time"] = time.time()
             add_observation(f"Anchor said: \"{decision['message']}\"", "nudge")
 
         return decision
-    except Exception as e:
-        return {"action": "stay_silent", "message": "", "options": [], "reason": f"Agent error: {e}"}
+    except Exception as e2:
+        return {"action": "stay_silent", "message": "", "options": [], "reason": f"Both agents failed: {e2}"}
 
 
 # ============================================================
@@ -477,7 +510,153 @@ async def speak(message: str):
         await asyncio.to_thread(play, audio)
         print("Done.")
     except Exception as e:
-        print("[VOICE ERROR]", repr(e))
+        print(f"[VOICE ERROR] {type(e).__name__}: {e}")
+        if hasattr(e, 'status_code'):
+            print(f"[VOICE ERROR] Status code: {e.status_code}")
+        if hasattr(e, 'body'):
+            print(f"[VOICE ERROR] Body: {e.body}")
+
+
+def speak_sync(message: str):
+    """Synchronous voice for use inside LangChain tools (which are sync)."""
+    try:
+        print(f'\n  [TOOL: speak] "{message}"')
+        audio = elevenlabs_client.text_to_speech.convert(
+            text=message, voice_id=VOICE_ID,
+            model_id="eleven_multilingual_v2", output_format="mp3_44100_128",
+        )
+        play(audio)
+    except Exception as e:
+        print(f"  [VOICE ERROR] {type(e).__name__}: {e}")
+        if hasattr(e, 'status_code'):
+            print(f"  [VOICE ERROR] Status code: {e.status_code}")
+        if hasattr(e, 'body'):
+            print(f"  [VOICE ERROR] Body: {e.body}")
+
+
+# ============================================================
+# LANGCHAIN AGENT TOOLS (6 tools)
+# ============================================================
+
+@tool
+def speak_to_user(message: str) -> str:
+    """Speak a message to the user via ElevenLabs voice. Use for gentle nudges,
+    observations, encouragement. Keep to 1-2 sentences MAX."""
+    speak_sync(message)
+    return f"Spoke to user: {message}"
+
+@tool
+def ask_user(question: str) -> str:
+    """Ask the user a question via voice. User responds by speaking back or clicking buttons.
+    Use when you need input -- unsure apps, checking if stuck, offering choices."""
+    speak_sync(question)
+    return f"Asked user via voice: {question}"
+
+@tool
+def suggest_break(duration_minutes: int, activity: str) -> str:
+    """Suggest a break with a specific GOOD activity. Use when executive function
+    tank is depleted (focused long then crashing), or 3+ nudges ignored.
+    ALWAYS suggest physical: stretch, walk, water, fresh air. NEVER phone/social media."""
+    msg = f"Time for a {duration_minutes}-minute break. {activity}"
+    print(f'\n  [TOOL: suggest_break] {duration_minutes}min - {activity}')
+    speak_sync(msg)
+    session_state["break_active"] = True
+    session_state["break_start"] = time.time()
+    return f"Suggested {duration_minutes} min break: {activity}"
+
+@tool
+def chunk_task(task_name: str, tiny_next_step: str) -> str:
+    """Break user's task into smallest possible next step. Use when overwhelmed
+    (never started), stuck (was working then stopped), or avoiding (drifts within 1-2 min).
+    Step must be SO small it feels effortless. Forms='fill first field'. Reading='read abstract'.
+    Coding='write function signature'. Writing='write one bad sentence'."""
+    msg = f"Here's what to do next: {tiny_next_step}"
+    print(f'\n  [TOOL: chunk_task] {task_name} -> {tiny_next_step}')
+    speak_sync(msg)
+    return f"Suggested tiny step for '{task_name}': {tiny_next_step}"
+
+@tool
+def search_adhd_strategy(situation: str) -> str:
+    """Search for ADHD-specific strategies via Tavily when standard approaches fail.
+    Use sparingly -- maybe once per session. Examples: 'executive function depletion',
+    'task initiation paralysis', 'boredom with repetitive tasks'."""
+    if not TAVILY_AVAILABLE:
+        return "Tavily not available. Use your built-in ADHD knowledge instead."
+    try:
+        tavily = TavilySearchResults(max_results=3)
+        results = tavily.invoke(f"ADHD {situation} strategy evidence-based")
+        summaries = [r["content"][:200] for r in results if isinstance(r, dict) and "content" in r]
+        return "Research findings: " + " | ".join(summaries) if summaries else "No results found."
+    except Exception as e:
+        return f"Search failed: {e}. Use built-in ADHD knowledge."
+
+@tool
+def suggest_dnd(reason: str) -> str:
+    """Suggest user enable Do Not Disturb. Use when notifications keep pulling
+    user away -- pattern of fast window switches to messaging apps."""
+    msg = f"You might want to turn on Do Not Disturb. {reason}"
+    print(f'\n  [TOOL: suggest_dnd] {reason}')
+    speak_sync(msg)
+    return f"Suggested DND: {reason}"
+
+
+# ============================================================
+# CREATE LANGCHAIN AGENT
+# ============================================================
+
+AGENT_SYSTEM_PROMPT = """You are Anchor, an AI body double with deep knowledge of ADHD neuroscience.
+You understand executive function depletion (Barkley's fuel tank model), time blindness,
+task initiation paralysis, hyperfocus risks, and good vs bad breaks.
+You are warm, supportive, never accusatory.
+
+6 TOOLS -- choose based on WHY the user is struggling:
+1. speak_to_user: Gentle nudges, encouragement. Most common tool.
+2. ask_user: Need user input via voice. Unsure apps, checking if stuck.
+3. suggest_break: Brain depleted. 20+ min focused then crashing, 3+ drifts in 5 min, 3+ nudges ignored. Physical activity only, never phone.
+4. chunk_task: Overwhelmed, stuck, or avoiding. SMALLEST possible next step specific to their task.
+5. search_adhd_strategy: Standard approaches failing. Research-backed fresh approach. Use sparingly.
+6. suggest_dnd: Notifications keep pulling user away.
+
+DIAGNOSIS -- diagnose BEFORE choosing tool:
+* DEPLETED: Focused 20+ min then drifting -> suggest_break
+* STUCK: Was working then hit wall -> chunk_task
+* OVERWHELMED: Never started, bouncing between apps -> chunk_task with smallest first step
+* BORED: Drifting to fun apps -> speak_to_user with empathy + mini-goal
+* AVOIDING: Returns but drifts within 1-2 min -> speak_to_user to name it + chunk_task
+* NOTIFICATION PULL: Fast switch, event says "NOTIFICATION PULL" -> suggest_dnd or speak_to_user gently
+* SILENT DRIFT: No keyboard/mouse -> ask_user "still with me?"
+
+RULES:
+- 1st drift: NO tools. Stay silent. Chance to self-correct.
+- 2nd drift: speak_to_user with gentle nudge.
+- 3rd+ drift: MUST use tool. Diagnose and pick right one.
+- 3+ nudges in 5 min: ALWAYS suggest_break. Nagging makes ADHD worse.
+- Messages MUST be specific to user's actual task. Never generic.
+- 1-2 sentences MAX. NEVER repeat same phrasing.
+- NEVER mention apps user hasn't visited. Use ACTUAL app names from history.
+- If ever_on_task is False: "you're on [actual app] -- ready to open your [task]?"
+- Task chunking: forms="fill first field", reading="read abstract", coding="write function signature"
+- Acknowledge task tedium: "Forms are repetitive" / "Dense papers are hard"
+- Can chain tools: search_adhd_strategy then speak_to_user with findings.
+- After break: chunk_task "What's the ONE small thing you'll do first?"
+
+When user is focused: NO tool calls (stay silent)."""
+
+
+def create_anchor_agent():
+    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.7)
+    tools = [speak_to_user, ask_user, suggest_break, chunk_task, search_adhd_strategy, suggest_dnd]
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", AGENT_SYSTEM_PROMPT),
+        ("human", "{input}"),
+        MessagesPlaceholder(variable_name="agent_scratchpad"),
+    ])
+    agent = create_tool_calling_agent(llm, tools, prompt)
+    return AgentExecutor(agent=agent, tools=tools, verbose=True, max_iterations=3, handle_parsing_errors=True)
+
+
+agent_executor = create_anchor_agent()
+print("[AGENT] LangChain agent with 6 tools created.")
 
 
 # ============================================================
@@ -539,7 +718,7 @@ async def monitoring_loop():
     last_title = ""
     last_relevant_window = ""
     relevant_window_start = None
-    last_window_change_time = time.time()  # Track when the last window switch happened
+    last_window_change_time = time.time()
 
     print("\n[MONITOR] Starting monitoring loop...")
 
@@ -570,21 +749,15 @@ async def monitoring_loop():
         # Window changed
         if title != last_title:
 
-            # Detect notification pull vs self-initiated switch
             time_since_last_switch = time.time() - last_window_change_time
             time_since_last_activity = time.time() - last_activity_time
-            # If window changed within 2 sec of last activity on previous window,
-            # AND user didn't type/click in the new window yet = notification pull
             is_notification_pull = time_since_last_switch < 3 and time_since_last_activity < 3
             last_window_change_time = time.time()
 
-            # Reset sustained drift tracking (user moved to a different window)
             session_state["sustained_drift_start"] = None
             session_state["sustained_drift_nudged"] = False
-            # Reset idle tracking (window changed = activity)
             session_state["idle_nudged"] = False
 
-            # Classify the new window
             result = classify_window(
                 session_state["task_context"],
                 title,
@@ -595,13 +768,11 @@ async def monitoring_loop():
             reason = result.get("reason", "")
             cached = result.get("from_cache", False)
 
-            # Update session state
             if verdict == "drift":
                 session_state["drift_count"] += 1
             elif verdict == "relevant":
                 session_state["ever_on_task"] = True
 
-            # Track time on relevant windows
             if verdict == "relevant":
                 if title != last_relevant_window:
                     relevant_window_start = time.time()
@@ -610,7 +781,6 @@ async def monitoring_loop():
                 relevant_window_start = None
                 last_relevant_window = ""
 
-            # Send classification to frontend
             await broadcast({
                 "type": "classification",
                 "window": title,
@@ -622,26 +792,24 @@ async def monitoring_loop():
                 "elapsed_min": elapsed
             })
 
-            # RELEVANT: save to history, don't call agent
             if verdict == "relevant":
                 add_observation(f"Window: {title} --> relevant ({confidence:.0%})")
                 await broadcast({"type": "status", "value": "focused"})
                 print(f"  [MONITOR] [{elapsed}m] RELEVANT: {title[:60]}")
 
-            # DRIFT: save to history, call agent
             elif verdict == "drift":
                 notification_note = " This was likely a NOTIFICATION PULL (app popped up on its own, user didn't deliberately navigate here). Be extra gentle." if is_notification_pull else " User deliberately navigated here."
                 add_observation(f"Window: {title} --> drift ({confidence:.0%}). Reason: {reason}.{notification_note}")
                 event_summary = f"Window changed to: {title} --> drift ({confidence:.0%}). Reason: {reason}. Total drifts: {session_state['drift_count']}.{notification_note}"
 
                 print(f"  [MONITOR] [{elapsed}m] DRIFT: {title[:60]}")
-                print(f"  [AGENT] Thinking...")
 
                 decision = anchor_agent_decide(event_summary)
 
                 if decision["action"] != "stay_silent":
                     print(f"  [AGENT] {decision['action'].upper()}: {decision['message']}")
-                    await speak(decision["message"])
+                    if not decision.get("already_spoken"):
+                        await speak(decision["message"])
                     await broadcast({
                         "type": "nudge",
                         "nudge_type": decision["action"],
@@ -653,7 +821,6 @@ async def monitoring_loop():
                 else:
                     print(f"  [AGENT] Staying silent: {decision['reason']}")
 
-            # UNSURE: save to history, call agent to decide whether to ask
             elif verdict == "unsure":
                 notification_note = " This was likely a NOTIFICATION PULL (app popped up on its own)." if is_notification_pull else ""
                 add_observation(f"Window: {title} --> unsure ({confidence:.0%}). Reason: {reason}.{notification_note}")
@@ -665,7 +832,8 @@ async def monitoring_loop():
 
                 if decision["action"] != "stay_silent":
                     print(f"  [AGENT] {decision['action'].upper()}: {decision['message']}")
-                    await speak(decision["message"])
+                    if not decision.get("already_spoken"):
+                        await speak(decision["message"])
                     await broadcast({
                         "type": "nudge",
                         "nudge_type": decision["action"],
@@ -679,7 +847,6 @@ async def monitoring_loop():
         else:
             # Same window -- check timeouts
 
-            # Long stay on relevant app (15+ min)
             if relevant_window_start and last_relevant_window:
                 time_on_window = (time.time() - relevant_window_start) / 60
                 long_stay_apps = ["claude", "chatgpt", "youtube", "openai"]
@@ -691,33 +858,33 @@ async def monitoring_loop():
 
                     decision = anchor_agent_decide(event_summary)
                     if decision["action"] != "stay_silent":
-                        await speak(decision["message"])
+                        if not decision.get("already_spoken"):
+                            await speak(decision["message"])
                         await broadcast({
                             "type": "nudge",
                             "nudge_type": decision["action"],
                             "message": decision["message"],
                             "options": decision.get("options", [])
                         })
-                    relevant_window_start = time.time()  # reset
+                    relevant_window_start = time.time()
 
-            # Sustained drift -- stuck on a drift app too long
             if last_title and last_title in classification_cache:
                 last_verdict = classification_cache[last_title].get("verdict")
                 if last_verdict == "drift" and relevant_window_start is None:
-                    # Start tracking if not already
                     if not session_state.get("sustained_drift_start"):
                         session_state["sustained_drift_start"] = time.time()
 
                     sustained_minutes = (time.time() - session_state["sustained_drift_start"]) / 60
 
                     if sustained_minutes >= 1 and not session_state.get("sustained_drift_nudged"):
-                        event_summary = f"User has been on drift app '{last_title}' for {sustained_minutes:.1f} minutes without leaving. They are stuck on this app even though it's not task-related."
+                        event_summary = f"User has been on drift app '{last_title}' for {sustained_minutes:.1f} minutes without leaving."
                         print(f"  [MONITOR] Sustained drift: {sustained_minutes:.1f}min on {last_title[:40]}")
 
                         decision = anchor_agent_decide(event_summary)
                         if decision["action"] != "stay_silent":
                             print(f"  [AGENT] SUSTAINED DRIFT: {decision['message']}")
-                            await speak(decision["message"])
+                            if not decision.get("already_spoken"):
+                                await speak(decision["message"])
                             await broadcast({
                                 "type": "nudge",
                                 "nudge_type": decision["action"],
@@ -726,27 +893,22 @@ async def monitoring_loop():
                             })
                         session_state["sustained_drift_nudged"] = True
 
-            # Silent drift -- correct window open but no keyboard/mouse activity
-            # Threshold depends on task type
             activity_type = session_state.get("task_context", {}).get("activity_type", "mixed")
             idle_thresholds = {
-                "writing": 1,    # forms, essays, quizzes -- constant typing expected
-                "coding": 3,     # sometimes you think before typing
-                "browsing": 1,   # should be clicking/scrolling
-                "reading": 7,    # legitimately staring at screen
-                "mixed": 1,      # default
+                "writing": 1, "coding": 3, "browsing": 1, "reading": 7, "mixed": 1,
             }
             idle_threshold = idle_thresholds.get(activity_type, 3)
 
             idle_minutes = (time.time() - last_activity_time) / 60
             if idle_minutes >= idle_threshold and session_state.get("ever_on_task") and not session_state.get("idle_nudged"):
-                event_summary = f"User has the correct window open but has had NO keyboard or mouse activity for {idle_minutes:.1f} minutes (threshold for {activity_type} task: {idle_threshold} min). They may have picked up their phone, zoned out, or left their desk."
-                print(f"  [MONITOR] Silent drift: {idle_minutes:.1f}min idle (threshold: {idle_threshold}min for {activity_type})")
+                event_summary = f"User has the correct window open but has had NO keyboard or mouse activity for {idle_minutes:.1f} minutes (threshold for {activity_type} task: {idle_threshold} min)."
+                print(f"  [MONITOR] Silent drift: {idle_minutes:.1f}min idle")
 
                 decision = anchor_agent_decide(event_summary)
                 if decision["action"] != "stay_silent":
                     print(f"  [AGENT] SILENT DRIFT: {decision['message']}")
-                    await speak(decision["message"])
+                    if not decision.get("already_spoken"):
+                        await speak(decision["message"])
                     await broadcast({
                         "type": "nudge",
                         "nudge_type": "silent_drift",
@@ -755,14 +917,14 @@ async def monitoring_loop():
                     })
                 session_state["idle_nudged"] = True
 
-            # Task initiation (1 min for testing, 3 min production)
             if not session_state.get("ever_on_task") and not session_state.get("task_initiation_nudged") and elapsed >= 1:
                 event_summary = f"User has been in session for {elapsed} minutes but NEVER opened a task-relevant app. Task initiation paralysis."
                 print(f"  [MONITOR] Task initiation timeout: {elapsed}min, never on task")
 
                 decision = anchor_agent_decide(event_summary)
                 if decision["action"] != "stay_silent":
-                    await speak(decision["message"])
+                    if not decision.get("already_spoken"):
+                        await speak(decision["message"])
                     await broadcast({
                         "type": "nudge",
                         "nudge_type": "task_initiation",
@@ -771,7 +933,6 @@ async def monitoring_loop():
                     })
                 session_state["task_initiation_nudged"] = True
 
-            # Hyperfocus (40+ min no break)
             last_break = session_state.get("last_break_time", session_state.get("start_time", time.time()))
             minutes_since_break = (time.time() - last_break) / 60
             if minutes_since_break >= 40 and session_state.get("ever_on_task"):
@@ -780,7 +941,8 @@ async def monitoring_loop():
 
                 decision = anchor_agent_decide(event_summary)
                 if decision["action"] != "stay_silent":
-                    await speak(decision["message"])
+                    if not decision.get("already_spoken"):
+                        await speak(decision["message"])
                     await broadcast({
                         "type": "nudge",
                         "nudge_type": "suggest_break",
@@ -798,7 +960,6 @@ async def monitoring_loop():
 # SESSION SUMMARY
 # ============================================================
 def build_session_summary() -> dict:
-    """Build the end-of-session summary from observation history"""
     total_time = round((time.time() - session_state["start_time"]) / 60, 1)
 
     drift_observations = [o for o in observation_history
@@ -884,6 +1045,16 @@ async def video_feed():
 async def get_activity():
     return latest_activity
 
+@app.get("/debug_frame")
+async def debug_frame():
+    """Returns current frame as PNG for debugging"""
+    if latest_jpeg_frame is None:
+        return {"error": "No frame available yet"}
+    arr = np.frombuffer(latest_jpeg_frame, dtype=np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    _, png = cv2.imencode('.png', img)
+    return StreamingResponse(iter([png.tobytes()]), media_type="image/png")
+
 @app.post("/camera/start")
 async def start_camera_endpoint():
     success = start_camera()
@@ -908,7 +1079,6 @@ async def root():
 
 @app.post("/session/start")
 async def start_session(request: SessionStartRequest):
-    """Start a new focus session"""
     global session_active, session_state, observation_history, classification_cache, monitoring_task
 
     if session_active:
@@ -966,7 +1136,6 @@ async def start_session(request: SessionStartRequest):
 
 @app.post("/session/end")
 async def end_session():
-    """End the current session and return summary"""
     global session_active, monitoring_task
 
     if not session_active:
@@ -981,20 +1150,14 @@ async def end_session():
             pass
 
     summary = build_session_summary()
-
     print(f"\n[SESSION] Ended. Focus: {summary['focused_time_min']}min, Drifts: {summary['drift_count']}")
 
-    await broadcast({
-        "type": "session_ended",
-        "summary": summary
-    })
-
+    await broadcast({"type": "session_ended", "summary": summary})
     return {"status": "session_ended", "summary": summary}
 
 
 @app.get("/session/status")
 async def get_session_status():
-    """Get current session status"""
     if not session_active:
         return {"active": False}
 

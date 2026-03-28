@@ -11,6 +11,7 @@ interface Props {
   onPullBack: () => void;
   onEndSession: () => void;
   sessionActive: boolean;
+  suppressMountGreeting?: boolean;
 }
 
 const MOTIVATION_QUOTES = [
@@ -122,6 +123,7 @@ const SmiskiCompanion = ({
   onPullBack,
   onEndSession,
   sessionActive,
+  suppressMountGreeting = false,
 }: Props) => {
   const [smiskiState, setSmiskiStateRaw] = useState<SmiskiState>("hidden");
   const [isWalking, setIsWalking] = useState(false);
@@ -181,9 +183,9 @@ const SmiskiCompanion = ({
 
   // ── Effects ───────────────────────────────────────────────────────────────
 
-  // Mount greeting — delayed so it appears after the welcome screen fades
+  // Mount greeting — skipped on welcome screen so user can trigger it themselves
   useEffect(() => {
-    if (hasGreeted.current) return;
+    if (hasGreeted.current || suppressMountGreeting) return;
     hasGreeted.current = true;
     setTimeout(() => {
       walkIn("Hi! I'm your focus buddy ✨ I'll keep you on track today");

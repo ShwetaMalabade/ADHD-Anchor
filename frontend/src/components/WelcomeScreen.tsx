@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Anchor } from "lucide-react";
 
@@ -28,6 +28,7 @@ const WelcomeScreen = ({ onComplete, onGreet }: Props) => {
   const [fadeOut, setFadeOut] = useState(false);
   const [activity, setActivity] = useState<{ activity: string; confidence: number; details: Record<string, unknown> } | null>(null);
   const [greeted, setGreeted] = useState(false);
+  const [micListening, setMicListening] = useState(false);
   const imgRef = useRef<HTMLImageElement>(null);
   const greetedRef = useRef(false);
 
@@ -45,19 +46,22 @@ const WelcomeScreen = ({ onComplete, onGreet }: Props) => {
     startCamera();
   }, []);
 
-  const triggerGreet = () => {
+  // Stable ref so interval/recognition callbacks always get the latest version
+  const triggerGreetRef = useRef<() => void>(() => {});
+  const triggerGreet = useCallback(() => {
     if (greetedRef.current) return;
     greetedRef.current = true;
     setGreeted(true);
+    console.log("[WelcomeScreen] Greeting triggered — calling onGreet");
     onGreet?.();
-    // Give Smiski 2.5s to walk in and say hi, then transition
     setTimeout(() => {
       setFadeOut(true);
       setTimeout(() => onComplete(), 800);
-    }, 2500);
-  };
+    }, 2800);
+  }, [onGreet, onComplete]);
+  triggerGreetRef.current = triggerGreet;
 
-  // Poll activity detection every second + detect hand raise
+  // Poll activity + hand raise
   useEffect(() => {
     if (!cameraReady) return;
     const poll = async () => {
@@ -65,7 +69,10 @@ const WelcomeScreen = ({ onComplete, onGreet }: Props) => {
         const res = await fetch(`${BACKEND_URL}/activity`);
         const data = await res.json();
         setActivity(data);
-        if (data.details?.hand_raised) triggerGreet();
+        if (data.details?.hand_raised) {
+          console.log("[WelcomeScreen] Hand raised detected");
+          triggerGreetRef.current();
+        }
       } catch {}
     };
     poll();
@@ -73,22 +80,41 @@ const WelcomeScreen = ({ onComplete, onGreet }: Props) => {
     return () => clearInterval(interval);
   }, [cameraReady]);
 
-  // Speech recognition — listen for "hi" / "hello" / "hey"
+  // Speech recognition — restart on end so it keeps listening
   useEffect(() => {
     if (!cameraReady) return;
-    const SpeechRecognition = (window as unknown as { SpeechRecognition?: unknown; webkitSpeechRecognition?: unknown }).SpeechRecognition
-      || (window as unknown as { webkitSpeechRecognition?: unknown }).webkitSpeechRecognition;
-    if (!SpeechRecognition) return;
-    const recognition = new (SpeechRecognition as new () => { continuous: boolean; interimResults: boolean; onresult: ((e: { results: { transcript: string }[][] }) => void) | null; start: () => void; onerror: () => void })();
-    recognition.continuous = true;
-    recognition.interimResults = false;
-    recognition.onresult = (e) => {
-      const transcript = e.results[e.results.length - 1][0].transcript.toLowerCase().trim();
-      if (/\b(hi|hello|hey)\b/.test(transcript)) triggerGreet();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SR) { console.warn("[WelcomeScreen] SpeechRecognition not supported"); return; }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let recognition: any = null;
+    let stopped = false;
+
+    const start = () => {
+      if (stopped) return;
+      recognition = new SR();
+      recognition.continuous = false;  // single-shot + restart = more reliable
+      recognition.interimResults = false;
+      recognition.lang = "en-US";
+
+      recognition.onstart = () => { setMicListening(true); console.log("[Speech] Listening..."); };
+      recognition.onend = () => { setMicListening(false); if (!stopped && !greetedRef.current) start(); };
+      recognition.onerror = (e: { error: string }) => {
+        console.warn("[Speech] Error:", e.error);
+        setMicListening(false);
+      };
+      recognition.onresult = (e: { results: { [key: number]: { [key: number]: { transcript: string } } }; resultIndex: number }) => {
+        const transcript = e.results[e.resultIndex][0].transcript.toLowerCase().trim();
+        console.log("[Speech] Heard:", transcript);
+        if (/\b(hi|hello|hey)\b/.test(transcript)) triggerGreetRef.current();
+      };
+
+      try { recognition.start(); } catch {}
     };
-    recognition.onerror = () => {};
-    recognition.start();
-    return () => { try { (recognition as unknown as { stop: () => void }).stop(); } catch {} };
+
+    start();
+    return () => { stopped = true; setMicListening(false); try { recognition?.stop(); } catch {} };
   }, [cameraReady]);
 
   // Show greeting after camera is ready
@@ -179,6 +205,22 @@ const WelcomeScreen = ({ onComplete, onGreet }: Props) => {
             <div className="h-2 w-2 rounded-full bg-sage animate-pulse" />
             <span className="text-xs text-muted-foreground">No recording</span>
           </div>
+
+          {/* Mic listening indicator */}
+          {cameraReady && (
+            <div className="absolute bottom-36 left-0 right-0 flex justify-center">
+              <motion.div
+                animate={{ opacity: micListening ? [0.6, 1, 0.6] : 0.5 }}
+                transition={{ duration: 1.2, repeat: micListening ? Infinity : 0 }}
+                className="bg-black/60 backdrop-blur-sm rounded-full px-4 py-2 flex items-center gap-2"
+              >
+                <span className="text-sm">{micListening ? "🎤" : "🎙️"}</span>
+                <span className="text-xs text-white/80">
+                  Say <span className="font-semibold text-white">"Hi"</span> or raise your hand to start
+                </span>
+              </motion.div>
+            </div>
+          )}
 
           {/* Live detection badge */}
           {activity && (
