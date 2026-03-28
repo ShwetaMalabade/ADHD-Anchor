@@ -85,30 +85,34 @@ def camera_loop():
     global latest_activity, latest_jpeg_frame, camera_running
     last_sent_activity = ""
     while camera_running:
-        with camera_lock:
-            if not camera_cap or not camera_cap.isOpened():
-                break
-            ret, frame = camera_cap.read()
-        if not ret:
+        try:
+            with camera_lock:
+                if not camera_cap or not camera_cap.isOpened():
+                    break
+                ret, frame = camera_cap.read()
+            if not ret:
+                time.sleep(0.1)
+                continue
+            frame = cv2.flip(frame, 1)
+            activity, confidence, details, hand_result, pose_result, face_result = activity_detector.detect(frame)
+            latest_activity = {"activity": activity, "confidence": confidence, "details": details}
+            pose_lms = pose_result.pose_landmarks[0] if pose_result.pose_landmarks else None
+            frame = blur_background(frame, pose_lms)
+            if hand_result.hand_landmarks:
+                for hand_lms in hand_result.hand_landmarks:
+                    draw_hand_landmarks(frame, hand_lms)
+            if pose_result.pose_landmarks:
+                draw_pose_landmarks(frame, pose_result.pose_landmarks[0])
+            frame = draw_status_overlay(frame, activity, confidence, details, activity_detector)
+            _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+            latest_jpeg_frame = jpeg.tobytes()
+            if activity != last_sent_activity and activity not in ("initializing", "checking", "unknown"):
+                print(f"  [CAMERA] Activity: {activity} ({confidence:.0%})")
+                last_sent_activity = activity
+            time.sleep(0.05)
+        except Exception as e:
+            print(f"  [CAMERA] Frame error (continuing): {e}")
             time.sleep(0.1)
-            continue
-        frame = cv2.flip(frame, 1)
-        activity, confidence, details, hand_result, pose_result, face_result = activity_detector.detect(frame)
-        latest_activity = {"activity": activity, "confidence": confidence, "details": details}
-        pose_lms = pose_result.pose_landmarks[0] if pose_result.pose_landmarks else None
-        frame = blur_background(frame, pose_lms)
-        if hand_result.hand_landmarks:
-            for hand_lms in hand_result.hand_landmarks:
-                draw_hand_landmarks(frame, hand_lms)
-        if pose_result.pose_landmarks:
-            draw_pose_landmarks(frame, pose_result.pose_landmarks[0])
-        frame = draw_status_overlay(frame, activity, confidence, details, activity_detector)
-        _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
-        latest_jpeg_frame = jpeg.tobytes()
-        if activity != last_sent_activity and activity not in ("initializing", "checking", "unknown"):
-            print(f"  [CAMERA] Activity: {activity} ({confidence:.0%})")
-            last_sent_activity = activity
-        time.sleep(0.05)
 
 
 def generate_mjpeg():
@@ -180,33 +184,13 @@ monitoring_task = None
 # WINDOW WATCHER (macOS)
 # ============================================================
 def get_active_window_title() -> str:
-    """Read the currently active window on macOS"""
-    script = '''
-    tell application "System Events"
-        set frontApp to name of first application process whose frontmost is true
-        set frontAppName to name of first window of (first application process whose frontmost is true)
-        return frontApp & " - " & frontAppName
-    end tell
-    '''
+    """Read the currently active window (Windows)"""
     try:
-        result = subprocess.run(
-            ["osascript", "-e", script],
-            capture_output=True, text=True, timeout=5
-        )
-        if result.returncode == 0:
-            return result.stdout.strip()
-        else:
-            fallback = '''
-            tell application "System Events"
-                return name of first application process whose frontmost is true
-            end tell
-            '''
-            result2 = subprocess.run(
-                ["osascript", "-e", fallback],
-                capture_output=True, text=True, timeout=5
-            )
-            return result2.stdout.strip() if result2.returncode == 0 else "Unknown"
-    except:
+        import win32gui
+        hwnd = win32gui.GetForegroundWindow()
+        title = win32gui.GetWindowText(hwnd)
+        return title if title else "Unknown"
+    except Exception:
         return "Unknown"
 
 

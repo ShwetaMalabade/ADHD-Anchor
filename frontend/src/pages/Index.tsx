@@ -9,15 +9,16 @@ import BreakTimer from "@/components/BreakTimer";
 import SessionSummary from "@/components/SessionSummary";
 import AgoraRoom from "@/components/AgoraRoom";
 import SmiskiCompanion from "@/components/SmiskiCompanion";
+import WelcomeScreen from "@/components/WelcomeScreen";
 
-type Screen = "start" | "dnd" | "focusing" | "break" | "summary" | "done";
+type Screen = "welcome" | "start" | "dnd" | "focusing" | "break" | "summary" | "done";
 type FocusStatus = "focused" | "checking" | "drifted";
 type NudgeType = "none" | "drift" | "notification" | "initiation";
 
 const DRIFT_SOURCES = ["YouTube", "Reddit", "Twitter", "Instagram", "TikTok"];
 
 const Index = () => {
-  const [screen, setScreen] = useState<Screen>("start");
+  const [screen, setScreen] = useState<Screen>("welcome");
   const [task, setTask] = useState("");
   const [durationMin, setDurationMin] = useState(60);
   const [elapsed, setElapsed] = useState(0);
@@ -152,6 +153,12 @@ const Index = () => {
   };
 
   const handleDNDContinue = () => {
+    // Tell backend to start session and begin drift monitoring
+    fetch("http://localhost:8000/session/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ task, duration_minutes: durationMin }),
+    }).catch(() => {}); // backend may not be running — that's ok
     setScreen("focusing");
   };
 
@@ -174,6 +181,7 @@ const Index = () => {
 
   const handleEndSession = () => {
     if (driftTimer.current) clearTimeout(driftTimer.current);
+    fetch("http://localhost:8000/session/end", { method: "POST" }).catch(() => {});
     setScreen("summary");
   };
 
@@ -223,6 +231,10 @@ const Index = () => {
         sessionActive={screen === "focusing"}
       />
       <AnimatePresence mode="wait">
+        {screen === "welcome" && (
+          <WelcomeScreen key="welcome" onComplete={() => setScreen("start")} />
+        )}
+
         {screen === "start" && (
           <SessionStart key="start" onStart={handleStartSession} />
         )}
