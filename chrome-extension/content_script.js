@@ -345,13 +345,7 @@
   });
 
   // ── Greeting on first load ────────────────────────────────────────────────────
-  // Skip on distraction sites — the drift nudge from background.js shows instead
-
-  if (!isDistractionSite) {
-    setTimeout(() => {
-      walkIn("Still on it 💪 I'm watching over you");
-      walkOut(4000);
-    }, 1200);
-  }
+  // Removed: was showing "I'm watching over you" on every non-distraction site
+  // Now handled by backend encouragement events only (every 5th relevant tab)
 
 })();

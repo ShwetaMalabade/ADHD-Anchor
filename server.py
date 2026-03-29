@@ -316,9 +316,8 @@ def classify_window(task_context: dict, window_title: str, expected_notification
 
     # Empty or useless titles -- browser with no real content
     skip_words = {"google chrome", "mozilla firefox", "safari", "microsoft edge", "electron", "new tab", ""}
-    meaningful_parts = [p.strip() for p in window_title.split(" - ") if p.strip().lower() not in skip_words and len(p.strip()) > 2]
-    # Also skip if remaining parts are just a username (single short word)
-    if not meaningful_parts or all(len(p) < 10 and " " not in p for p in meaningful_parts):
+    meaningful_parts = [p.strip() for p in window_title.split(" - ") if p.strip().lower() not in skip_words and len(p.strip()) > 1]
+    if not meaningful_parts:
         return {"verdict": "unsure", "confidence": 0.3, "reason": "Empty/loading page", "is_anchor": True}
 
     if window_title in classification_cache:
@@ -357,6 +356,8 @@ CRITICAL RULES:
 
 4. Shopping sites (Amazon, eBay) = "drift" always.
 
+4b. Streaming/entertainment sites (Netflix, Hulu, Disney+, Twitch, Spotify web player) = "drift" unless the task specifically involves watching something on that platform.
+
 5. AI tools (ChatGPT, Claude, Gemini) = READ THE CONVERSATION TITLE. If topic matches task = "relevant". If unrelated = "drift". If no title visible = "unsure".
 
 6. Terminal/command line/VS Code/Electron = "relevant" ONLY if user's task involves coding. Otherwise "drift". "Electron - ADHD-Anchor" or any IDE window is NOT relevant for reading/writing/browsing tasks.
@@ -366,6 +367,8 @@ CRITICAL RULES:
 8. "New Tab", blank pages, or pages with no clear content = "unsure".
 
 9. Numeric IDs like "2501.00148", "2002.06673" are arXiv research paper IDs. If the task involves reading/research, these are ALWAYS "relevant".
+
+10. MOST IMPORTANT: Read the FULL window title carefully. Ask yourself: "Is what this person is looking at RIGHT NOW directly helping them complete their task?" If the answer is no, it's "drift". Don't be generous -- if the website content has nothing to do with the task, classify as "drift" even if the app itself could theoretically be useful. Netflix for a reading task = drift. YouTube cooking video for a coding task = drift. A login page for a site unrelated to the task = drift.
 
 Return ONLY JSON:
 {{"verdict": "relevant" or "drift" or "unsure", "confidence": 0.0 to 1.0, "reason": "brief explanation"}}"""
@@ -1386,13 +1389,18 @@ async def monitoring_loop():
                     sustained_minutes = (time.time() - session_state["sustained_drift_start"]) / 60
 
                     if sustained_minutes >= 0.5 and not session_state.get("sustained_drift_nudged"):  # 30 seconds
-                        event_summary = f"User has been on drift app '{last_title}' for {sustained_minutes:.1f} minutes without leaving."
-                        print(f"  [MONITOR] Sustained drift: {sustained_minutes:.1f}min on {last_title[:40]}")
-
-                        decision = await anchor_agent_decide_async(event_summary)
-                        if decision["action"] != "stay_silent":
-                            print(f"  [AGENT] SUSTAINED DRIFT: {decision['message']}")
-                            await nudge_and_speak(decision)
+                        task = session_state.get("task", "your task")
+                        parts = [p.strip() for p in last_title.split(" - ") if p.strip().lower() not in ("google chrome", "mozilla firefox", "safari", "microsoft edge", "electron")]
+                        app = parts[0][:30] if parts else last_title[:30]
+                        print(f"  [MONITOR] Sustained drift: {sustained_minutes:.1f}min on {app}")
+                        sustained_msgs = [
+                            f"You've been on {app} for a while. {task} is waiting.",
+                            f"Still on {app}? Let's get back to {task}.",
+                            f"Been on {app} for {sustained_minutes:.0f} minutes. Ready to switch back?",
+                        ]
+                        message = random.choice(sustained_msgs)
+                        decision = {"action": "speak", "message": message, "options": ["Pull me back", "Taking a break"]}
+                        await nudge_and_speak(decision, {"drift_count": session_state.get("drift_count", 0)})
                         session_state["sustained_drift_nudged"] = True
 
             activity_type = session_state.get("task_context", {}).get("activity_type", "mixed")
@@ -1403,13 +1411,15 @@ async def monitoring_loop():
 
             idle_minutes = (time.time() - last_activity_time) / 60
             if idle_minutes >= idle_threshold and session_state.get("ever_on_task") and not session_state.get("idle_nudged"):
-                event_summary = f"User has the correct window open but has had NO keyboard or mouse activity for {idle_minutes:.1f} minutes (threshold for {activity_type} task: {idle_threshold} min)."
                 print(f"  [MONITOR] Silent drift: {idle_minutes:.1f}min idle")
-
-                decision = await anchor_agent_decide_async(event_summary)
-                if decision["action"] != "stay_silent":
-                    print(f"  [AGENT] SILENT DRIFT: {decision['message']}")
-                    await nudge_and_speak(decision, {"nudge_type": "silent_drift", "options": ["I'm here", "Taking a break"]})
+                silent_msgs = [
+                    "Your screen has been quiet. Still with me?",
+                    "Haven't seen you move in a bit. Need a break?",
+                    "Still there? Just checking in.",
+                ]
+                message = random.choice(silent_msgs)
+                decision = {"action": "ask", "message": message, "options": ["I'm here", "Taking a break"]}
+                await nudge_and_speak(decision, {"nudge_type": "silent_drift"})
                 session_state["idle_nudged"] = True
 
             if not session_state.get("ever_on_task") and elapsed >= 0.083 and not session_state.get("waiting_for_response"):  # ~5 seconds, skip if waiting for unsure answer

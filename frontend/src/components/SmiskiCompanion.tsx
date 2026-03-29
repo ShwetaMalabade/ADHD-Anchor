@@ -274,18 +274,25 @@ const SmiskiCompanion = ({
     if (nudgeId == null || !nudgeText) return;
     if (buddyBusy.current) return;
 
-    // Check if this is an encouragement (not a drift)
+    // Check nudge type
     const isEncouragement = nudgeText.includes("watching you") || nudgeText.includes("crushing it") || nudgeText.includes("doing great");
+    const isTaskInitiation = nudgeText.includes("Let's get started") || nudgeText.includes("Time to start") || nudgeText.includes("Let's go") || nudgeText.includes("Let's do this") || nudgeText.includes("waiting for you") || nudgeText.includes("Just begin") || nudgeText.includes("Just open it") || nudgeText.includes("I believe in you");
 
-    if (!isEncouragement) {
+    if (!isEncouragement && !isTaskInitiation) {
       hasDrifted.current = true;  // Only drift nudges count
     }
 
     const showNudge = () => {
       if (isEncouragement) {
-        // Gentle encouragement -- no buttons, auto-dismiss in 5s
         walkIn(nudgeText, false);
         walkOut(5000);
+        return;
+      }
+      if (isTaskInitiation && !hasDrifted.current) {
+        // First-time task initiation -- gentle, no drift buttons
+        walkIn(nudgeText, false);
+        setIsAlertActive(true);  // Show "Let's go!" button only
+        walkOut(8000);
         return;
       }
       walkIn(nudgeText, true);
