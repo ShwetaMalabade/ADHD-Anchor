@@ -7,6 +7,7 @@ type SmiskiState = "hidden" | "present" | "menu";
 interface Props {
   nudgeText?: string;
   nudgeId?: number;
+  nudgeType?: string;
   noteEvent?: { text: string; id: number } | null;
   buddyPromptEvent?: { id: number } | null;
   buddyAckEvent?: { text: string; id: number } | null;
@@ -163,6 +164,7 @@ function generateAckFromReply(reply: string): string {
 const SmiskiCompanion = ({
   nudgeText,
   nudgeId,
+  nudgeType,
   noteEvent,
   buddyPromptEvent,
   buddyAckEvent,
@@ -179,6 +181,7 @@ const SmiskiCompanion = ({
   const [bubbleText, setBubbleText] = useState("");
   const [showBubble, setShowBubble] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
+  const [currentNudgeType, setCurrentNudgeType] = useState<string | undefined>();
 
   const stateRef = useRef<SmiskiState>("hidden");
   const setSmiskiState = (s: SmiskiState) => {
@@ -272,10 +275,19 @@ const SmiskiCompanion = ({
   useEffect(() => {
     if (nudgeId == null || !nudgeText) return;
     if (buddyBusy.current) return;
-    walkIn(nudgeText, true);
+    setCurrentNudgeType(nudgeType);
+    const isGentle = nudgeType === "task_initiation" || nudgeType === "encouragement";
+    walkIn(nudgeText, !isGentle);
+    if (isGentle) {
+      if (nudgeType === "task_initiation") {
+        setIsAlertActive(true);
+      }
+      walkOut(6000);
+    }
     alertExitTimer.current = setTimeout(() => {
       setShowBubble(false);
       setIsAlertActive(false);
+      setCurrentNudgeType(undefined);
       walkOut(200);
     }, 20000);
     return () => { if (alertExitTimer.current) clearTimeout(alertExitTimer.current); };
@@ -531,18 +543,35 @@ const SmiskiCompanion = ({
                 transition={{ delay: 0.1, duration: 0.2 }}
                 className="pointer-events-auto flex flex-col gap-1.5"
               >
-                <button
-                  onClick={handleTakeBreak}
-                  className="rounded-xl bg-card border border-border px-3 py-2 text-xs font-medium text-foreground hover:bg-secondary transition-colors shadow-sm text-left"
-                >
-                  Take a break
-                </button>
-                <button
-                  onClick={handlePullBack}
-                  className="btn-primary-action rounded-xl px-3 py-2 text-xs font-semibold shadow-sm"
-                >
-                  Pull me back
-                </button>
+                {currentNudgeType === "task_initiation" ? (
+                  <button
+                    onClick={() => {
+                      if (alertExitTimer.current) clearTimeout(alertExitTimer.current);
+                      setIsAlertActive(false);
+                      setCurrentNudgeType(undefined);
+                      onPullBack();
+                      walkOut();
+                    }}
+                    className="btn-primary-action rounded-xl px-3 py-2 text-xs font-semibold shadow-sm"
+                  >
+                    I'm ready
+                  </button>
+                ) : (
+                  <>
+                    <button
+                      onClick={handleTakeBreak}
+                      className="rounded-xl bg-card border border-border px-3 py-2 text-xs font-medium text-foreground hover:bg-secondary transition-colors shadow-sm text-left"
+                    >
+                      Take a break
+                    </button>
+                    <button
+                      onClick={handlePullBack}
+                      className="btn-primary-action rounded-xl px-3 py-2 text-xs font-semibold shadow-sm"
+                    >
+                      Pull me back
+                    </button>
+                  </>
+                )}
               </motion.div>
             )}
           </AnimatePresence>

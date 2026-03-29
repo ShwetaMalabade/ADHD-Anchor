@@ -268,7 +268,11 @@
     if (msg.type === "backend_event") {
       const data = msg.payload;
 
-      if (data.type === "nudge" || data.type === "phone_detected") {
+      if (data.type === "nudge" && data.nudge_type === "encouragement") {
+        walkIn(data.message || "Still on it 💪 I'm watching over you");
+        walkOut(5000);
+
+      } else if (data.type === "nudge" || data.type === "phone_detected") {
         const source = data.source || "something";
         const text = data.message || `Hey, you drifted to ${source}. Break or get back?`;
         walkIn(text, true);
@@ -321,11 +325,8 @@
   // ── Greeting on first load ────────────────────────────────────────────────────
   // Skip on distraction sites — the drift nudge from background.js shows instead
 
-  if (!isDistractionSite) {
-    setTimeout(() => {
-      walkIn("Still on it 💪 I'm watching over you");
-      walkOut(4000);
-    }, 1200);
-  }
+  // Encouragement on relevant pages is handled by the backend (every 5th tab).
+  // The backend sends a nudge with nudge_type="encouragement" which the
+  // backend_event handler above forwards to Smiski.
 
 })();

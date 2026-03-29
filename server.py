@@ -914,6 +914,7 @@ async def monitoring_loop():
     last_window_change_time = time.time()
     last_phone_nudge_time = 0
     phone_detect_count = 0
+    relevant_tab_count = 0
 
     print("\n[MONITOR] Starting monitoring loop...")
 
@@ -991,10 +992,24 @@ async def monitoring_loop():
             })
 
             if verdict == "relevant":
-                stop_speaking()  # Stop any playing nudge -- user self-corrected
+                stop_speaking()
+                relevant_tab_count += 1
                 add_observation(f"Window: {title} --> relevant ({confidence:.0%})")
                 await broadcast({"type": "status", "value": "focused"})
-                print(f"  [MONITOR] [{elapsed}m] RELEVANT: {title[:60]}")
+                print(f"  [MONITOR] [{elapsed}m] RELEVANT ({relevant_tab_count}): {title[:60]}")
+
+                if relevant_tab_count % 5 == 0:
+                    task = session_state.get("task", "your task")
+                    encouragements = [
+                        f"You're crushing it! {relevant_tab_count} tabs deep into {task}. I'm watching over you!",
+                        f"Look at you go! Still locked in on {task}. Keep that momentum!",
+                        f"Solid focus! You've stayed on track. I'm right here if you need me.",
+                    ]
+                    msg = encouragements[relevant_tab_count // 5 % len(encouragements)]
+                    await nudge_and_speak(
+                        {"action": "speak", "message": msg},
+                        {"nudge_type": "encouragement"},
+                    )
 
             elif verdict == "drift":
                 add_observation(f"Window: {title} --> drift ({confidence:.0%}). Reason: {reason}.")

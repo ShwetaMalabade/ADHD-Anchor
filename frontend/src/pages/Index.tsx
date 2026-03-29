@@ -27,7 +27,7 @@ const Index = () => {
   const [isPaused, setIsPaused] = useState(false);
   const [focusStatus, setFocusStatus] = useState<FocusStatus>("focused");
   const [nudge, setNudge] = useState<NudgeType>("none");
-  const [activeNudge, setActiveNudge] = useState<{ text: string; id: number } | null>(null);
+  const [activeNudge, setActiveNudge] = useState<{ text: string; id: number; nudgeType?: string } | null>(null);
   const nudgeCounter = useRef(0);
   const [driftCount, setDriftCount] = useState(0);
   const [driftTriggers, setDriftTriggers] = useState<string[]>([]);
@@ -221,13 +221,15 @@ const Index = () => {
           const data = JSON.parse(e.data);
 
           if (data.type === "nudge" || data.type === "phone_detected") {
-            setFocusStatus("drifted");
+            if (data.nudge_type !== "task_initiation" && data.nudge_type !== "encouragement") {
+              setFocusStatus("drifted");
+            }
             if (data.drift_count != null) {
               setDriftCount(data.drift_count);
             }
             nudgeCounter.current += 1;
             const msg = data.message || "Hey, you drifted. Break or get back?";
-            setActiveNudge({ text: msg, id: nudgeCounter.current });
+            setActiveNudge({ text: msg, id: nudgeCounter.current, nudgeType: data.nudge_type });
             addLog("nudge", "\u{1F5E3}\uFE0F", `Anchor: "${msg}"`);
           } else if (data.type === "status") {
             setFocusStatus(data.value);
@@ -435,6 +437,7 @@ const Index = () => {
       <SmiskiCompanion
         nudgeText={activeNudge?.text}
         nudgeId={activeNudge?.id}
+        nudgeType={activeNudge?.nudgeType}
         noteEvent={noteEvent}
         buddyPromptEvent={buddyPromptEvent}
         buddyAckEvent={buddyAckEvent}
