@@ -7,6 +7,9 @@ type SmiskiState = "hidden" | "present" | "menu";
 interface Props {
   nudgeText?: string;
   nudgeId?: number;
+  task?: string;
+  elapsedSeconds?: number;
+  driftCount?: number;
   onTakeBreak: () => void;
   onPullBack: () => void;
   onEndSession: () => void;
@@ -14,13 +17,48 @@ interface Props {
   suppressMountGreeting?: boolean;
 }
 
+const BACKEND_URL = "http://localhost:8000";
+
+async function fetchBuddyMessage(
+  scenario: string,
+  task = "",
+  elapsedSeconds = 0,
+  driftCount = 0,
+  fallback: string,
+): Promise<string> {
+  try {
+    const params = new URLSearchParams({
+      scenario,
+      task,
+      elapsed_seconds: String(elapsedSeconds),
+      drift_count: String(driftCount),
+    });
+    const res = await fetch(`${BACKEND_URL}/buddy/message?${params}`);
+    if (!res.ok) return fallback;
+    const data = await res.json();
+    return data.message || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+// Motivation quotes shown every ~10 min — warm check-ins, not corporate slogans
 const MOTIVATION_QUOTES = [
-  "You're doing amazing. Keep going ✨",
-  "Focus is a superpower. You've got this 💪",
-  "One task at a time. Progress is progress 🌱",
-  "Deep work = deep results. Stay with it 🎯",
-  "Your future self will thank you for this 🌟",
-  "Almost there — don't stop now 🏁",
+  "hey, just checking in 🌿 you're doing really well",
+  "I know this stuff takes effort. honestly, proud of you for sticking with it 💙",
+  "take a little breath. you're making real progress today ✨",
+  "you don't have to be perfect — just keep going. that's all it takes 🌱",
+  "still here with you! you've got this, one step at a time 🤝",
+  "small wins still count. you're moving forward and that matters 🌟",
+];
+
+// Cheer messages shown every 5 consecutive non-drift windows
+const CHEER_MESSAGES = [
+  "you've been so focused lately 🔥 keep riding this wave!",
+  "okay wow, you're genuinely in the zone right now 💫",
+  "I see you staying on track — this is awesome 🙌",
+  "look at you go! seriously impressive focus right now ✨",
+  "this is what flow looks like. you're doing amazing 🌟",
 ];
 
 // Pale yellow-green matching real Smiski figurines
@@ -119,6 +157,9 @@ const SmiskiCharacter = ({ isWalking, isUrgent }: CharacterProps) => {
 const SmiskiCompanion = ({
   nudgeText,
   nudgeId,
+  task = "",
+  elapsedSeconds = 0,
+  driftCount = 0,
   onTakeBreak,
   onPullBack,
   onEndSession,
@@ -140,6 +181,7 @@ const SmiskiCompanion = ({
   };
 
   const hasGreeted = useRef(false);
+  const sessionStartShown = useRef(false);
   const prevSessionActive = useRef(false);
   const exitTimer = useRef<ReturnType<typeof setTimeout>>();
   const alertExitTimer = useRef<ReturnType<typeof setTimeout>>();
@@ -187,21 +229,30 @@ const SmiskiCompanion = ({
   useEffect(() => {
     if (hasGreeted.current || suppressMountGreeting) return;
     hasGreeted.current = true;
-    setTimeout(() => {
-      walkIn("Hi! I'm your focus buddy ✨ I'll keep you on track today");
-      walkOut(5000);
-    }, 11500);
-  }, []);
+    setTimeout(async () => {
+      const msg = await fetchBuddyMessage(
+        "greeting", task, elapsedSeconds, driftCount,
+        "hey! I'm your little focus buddy 🌿 I'll be right here cheering you on"
+      );
+      walkIn(msg);
+      walkOut(5500);
+    }, 1500);
+  }, [suppressMountGreeting]);
 
-  // Session start
+  // Session start — fires exactly once when sessionActive first becomes true
   useEffect(() => {
-    if (sessionActive && !prevSessionActive.current) {
+    if (sessionActive && !sessionStartShown.current) {
+      sessionStartShown.current = true;
       prevSessionActive.current = true;
-      walkIn("Let's focus! 💪 I'm here if you need me");
-      walkOut(4000);
+      fetchBuddyMessage(
+        "session_start", task, elapsedSeconds, driftCount,
+        "okay, let's do this! I'm right here with you the whole time 💪"
+      ).then((msg) => {
+        walkIn(msg);
+        walkOut(4500);
+      });
     }
-    if (!sessionActive) prevSessionActive.current = false;
-  }, [sessionActive]);
+  }, [sessionActive, task]);
 
   // Timed motivation quotes — every 10 minutes
   useEffect(() => {
@@ -209,11 +260,12 @@ const SmiskiCompanion = ({
       if (quoteInterval.current) clearInterval(quoteInterval.current);
       return;
     }
-    quoteInterval.current = setInterval(() => {
+    quoteInterval.current = setInterval(async () => {
       if (stateRef.current !== "hidden") return;
-      const q = MOTIVATION_QUOTES[Math.floor(Math.random() * MOTIVATION_QUOTES.length)];
-      walkIn(q);
-      walkOut(5500);
+      const fallback = MOTIVATION_QUOTES[Math.floor(Math.random() * MOTIVATION_QUOTES.length)];
+      const msg = await fetchBuddyMessage("motivation", task, elapsedSeconds, driftCount, fallback);
+      walkIn(msg);
+      walkOut(6000);
     }, 10 * 60 * 1000);
     return () => { if (quoteInterval.current) clearInterval(quoteInterval.current); };
   }, [sessionActive]);
@@ -256,12 +308,14 @@ const SmiskiCompanion = ({
     onTakeBreak();
   };
 
-  const handleMotivation = () => {
-    const q = MOTIVATION_QUOTES[Math.floor(Math.random() * MOTIVATION_QUOTES.length)];
-    setBubbleText(q);
+  const handleMotivation = async () => {
+    const pool = [...MOTIVATION_QUOTES, ...CHEER_MESSAGES];
+    const fallback = pool[Math.floor(Math.random() * pool.length)];
+    const msg = await fetchBuddyMessage("motivation", task, elapsedSeconds, driftCount, fallback);
+    setBubbleText(msg);
     setSmiskiState("present");
     setShowBubble(true);
-    walkOut(5000);
+    walkOut(5500);
   };
 
   // ── Derived values ────────────────────────────────────────────────────────

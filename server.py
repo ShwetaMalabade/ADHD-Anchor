@@ -36,7 +36,7 @@ load_dotenv()
 
 # LangChain imports
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_classic.agents import create_tool_calling_agent, AgentExecutor
+from langchain.agents import create_tool_calling_agent, AgentExecutor
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.tools import tool
 
@@ -408,18 +408,24 @@ LATEST EVENT:
 {new_event_summary}
 
 Based on the above, diagnose why the user is in this state and choose the right tool(s).
-If the user is focused on a task-relevant app, use NO tools (stay silent).
-Even on the 1st drift, you MUST call speak_to_user to gently point out the drift.
-OTHERWISE YOU MUST CALL A TOOL. Specifically:
-- drift_count >= 2: MUST call speak_to_user or ask_user.
-- ever_on_task is False and elapsed >= 0.7: MUST call chunk_task or speak_to_user to help them start.
-- Sustained drift (1+ min on drift app): MUST call speak_to_user.
-- User spoke via voice: MUST call speak_to_user to respond.
-- recent_nudges >= 3: MUST call suggest_break -- nagging makes ADHD worse.
+
+WHEN TO STAY SILENT (do not call any tool):
+- The current window is task-relevant or likely task-relevant (including unsure windows that seem work-related).
+- The user just switched between two work-related windows.
+- You recently nudged and the user is still trying to refocus.
+
+WHEN TO SPEAK — only if the LATEST EVENT is clearly a drift:
+- The current window is a known distraction app: call speak_to_user.
+- Sustained drift (user stuck on a drift app for 30+ sec): call speak_to_user.
+- ever_on_task is False and elapsed >= 0.7 min: call chunk_task or speak_to_user to help them start.
+- User spoke via voice: ALWAYS respond with speak_to_user or ask_user.
+- recent_nudges >= 3: call suggest_break instead — nagging makes ADHD worse.
+
+DO NOT call speak_to_user just because drift_count is high. High drift count means the user is struggling — be MORE selective about when you speak, not less.
 DO NOT just output text. You MUST call a tool or the user hears nothing.
 All messages must reference the user's actual task: "{session_state['task']}" and actual apps from history.
 If ever_on_task is False, say "you're on [actual app] -- ready to open your [task]?" or use countdown "3, 2, 1 let's go!"
-If ever_on_task is True, the user HAS already worked on their task before. Do NOT use task initiation language like "let's get started", "3, 2, 1", "ready to open your task?", or "let's begin". Instead, acknowledge they were working and gently redirect: "You were doing great on [task]. Ready to jump back in?" or "You stepped away from [task]. Need a break or want to get back?"
+If ever_on_task is True, do NOT use task initiation language. Gently redirect: "You were doing great on [task]. Ready to jump back in?"
 NEVER repeat phrasing from previous nudges in the history."""
 
     # Try LangChain agent first
@@ -657,7 +663,7 @@ When user is focused: NO tool calls (stay silent)."""
 
 
 def create_anchor_agent():
-    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.7)
+    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.7, google_api_key=os.getenv("GEMINI_API_KEY"))
     tools = [speak_to_user, ask_user, suggest_break, chunk_task, search_adhd_strategy, suggest_dnd]
     prompt = ChatPromptTemplate.from_messages([
         ("system", AGENT_SYSTEM_PROMPT),
@@ -795,20 +801,21 @@ RULES:
 - Can chain tools: search_adhd_strategy then speak_to_user with findings.
 - After break: chunk_task "What's the ONE small thing you'll do first?"
 
-When user is focused: NO tool calls (stay silent).
+When user is focused or switching between work-related windows: NO tool calls (stay silent).
 
-CRITICAL: You MUST call a tool (speak_to_user, ask_user, suggest_break, or chunk_task) in ALL of these situations:
-- drift_count >= 2: User has drifted multiple times.
-- ever_on_task is False and elapsed >= 0.7 min: User hasn't even opened their task after 40+ seconds. Use chunk_task or speak_to_user to help them start.
-- User has been on a drift app for 1+ minute (sustained drift event).
+WHEN TO SPEAK — only if the LATEST EVENT is clearly a drift:
+- The current window is a known distraction app: call speak_to_user.
+- Sustained drift (stuck on drift app for 30+ sec): call speak_to_user.
+- ever_on_task is False and elapsed >= 0.7 min: call chunk_task or speak_to_user to help them start.
 - User spoke via voice: ALWAYS respond with speak_to_user or ask_user.
-- 3+ nudges recently: Use suggest_break instead of another nudge.
+- 3+ nudges recently: call suggest_break instead of another nudge.
 
+Do NOT call speak_to_user just because drift_count is high. High drift count means the user is struggling — be MORE selective, not less.
 Do NOT just output text -- you MUST invoke a tool. Outputting text without calling a tool means the user hears NOTHING. The ONLY way to communicate with the user is through tools. If you want to say something, call speak_to_user. If you want to stay silent, call no tools."""
 
 
 def create_anchor_agent():
-    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.7)
+    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.7, google_api_key=os.getenv("GEMINI_API_KEY"))
     tools = [speak_to_user, ask_user, suggest_break, chunk_task, search_adhd_strategy, suggest_dnd]
     prompt = ChatPromptTemplate.from_messages([
         ("system", AGENT_SYSTEM_PROMPT),
@@ -1468,6 +1475,76 @@ async def end_session():
 
     await broadcast({"type": "session_ended", "summary": summary})
     return {"status": "session_ended", "summary": summary}
+
+
+@app.get("/buddy/message")
+async def buddy_message(
+    scenario: str = "motivation",
+    task: str = "",
+    elapsed_seconds: int = 0,
+    drift_count: int = 0,
+):
+    """
+    Generate a short, warm, context-aware buddy message via Gemini.
+    scenario: 'greeting' | 'session_start' | 'motivation' | 'cheer'
+    """
+    elapsed_min = elapsed_seconds // 60
+    elapsed_str = f"{elapsed_min} minute{'s' if elapsed_min != 1 else ''}" if elapsed_min > 0 else "just a moment"
+
+    scenario_instructions = {
+        "greeting": "The user just opened the app. Say a short, warm hello and introduce yourself as their focus buddy. Keep it casual and friendly — like a friend saying hi, not a corporate assistant.",
+        "session_start": f"The user is about to start working on: \"{task}\". Give them a short, genuine encouragement to kick off the session. Reference their actual task naturally if you can. Keep it human and warm.",
+        "motivation": f"The user has been working on \"{task}\" for {elapsed_str} and has drifted {drift_count} time{'s' if drift_count != 1 else ''}. Send a warm, casual check-in. Acknowledge their effort honestly — don't be over-the-top positive. Keep it short.",
+        "cheer": f"The user has been staying focused on \"{task}\" for {elapsed_str} without drifting. Give them a short, genuine cheer. React like a friend who noticed they're doing really well. Keep it natural.",
+    }
+
+    instruction = scenario_instructions.get(scenario, scenario_instructions["motivation"])
+
+    # Random angle forces Gemini to vary its response even with identical context
+    angles = [
+        "Be a little playful.",
+        "Be quietly encouraging, like a nudge from a friend.",
+        "Be warm and sincere — no hype.",
+        "Be casual and low-key, like a quick text.",
+        "Be real — acknowledge it takes effort.",
+        "Keep it soft and gentle.",
+        "Sound a little proud of them.",
+        "Be brief and direct — one punchy line.",
+    ]
+    angle = random.choice(angles)
+
+    prompt = f"""You are Smiski, a small glowing focus companion. You speak like a warm, understanding friend — not a productivity app.
+
+Rules:
+- Max 12 words. Short is better.
+- Use 1 emoji max, only if it fits naturally.
+- Never say "I notice", "I see", "Great job!", or anything corporate.
+- Sound like a real person texting a friend, not an assistant.
+- Never repeat the task name word-for-word, just reference the work naturally.
+- Tone for this message: {angle}
+
+Scenario: {instruction}
+
+Reply with ONLY the message text, nothing else."""
+
+    try:
+        from google.genai import types as genai_types
+        response = gemini_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=genai_types.GenerateContentConfig(temperature=1.4),
+        )
+        message = response.text.strip().strip('"').strip("'")
+        return {"message": message, "scenario": scenario}
+    except Exception as e:
+        print(f"[BUDDY] Message generation failed: {e}")
+        fallbacks = {
+            "greeting": "hey! I'm your little focus buddy 🌿 I'll be right here with you",
+            "session_start": "okay, let's do this! I'm right here with you 💪",
+            "motivation": "still here with you. you've got this 🤝",
+            "cheer": "you've been so focused lately 🔥 keep riding this wave!",
+        }
+        return {"message": fallbacks.get(scenario, "you're doing great, keep going ✨"), "scenario": scenario}
 
 
 @app.get("/session/status")

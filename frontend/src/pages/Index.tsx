@@ -293,6 +293,9 @@ const Index = () => {
       <SmiskiCompanion
         nudgeText={activeNudge?.text}
         nudgeId={activeNudge?.id}
+        task={task}
+        elapsedSeconds={elapsed}
+        driftCount={driftCount}
         onTakeBreak={handleTakeBreak}
         onPullBack={handlePullBack}
         onEndSession={handleEndSession}

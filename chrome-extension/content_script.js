@@ -13,14 +13,31 @@
   const BODY_COLOR = "hsl(75, 40%, 82%)";
   const STROKE_COLOR = "hsl(75, 22%, 62%)";
 
-  const MOTIVATION_QUOTES = [
-    "You're doing amazing. Keep going ✨",
-    "Focus is a superpower. You've got this 💪",
-    "One task at a time. Progress is progress 🌱",
-    "Deep work = deep results. Stay with it 🎯",
-    "Your future self will thank you for this 🌟",
-    "Almost there — don't stop now 🏁",
+  const FALLBACK_QUOTES = [
+    "hey, just checking in 🌿 you're doing really well",
+    "still here with you. you've got this 🤝",
+    "you don't have to be perfect — just keep going 🌱",
+    "small wins still count. you're moving forward 🌟",
+    "I know this stuff takes effort. proud of you 💙",
   ];
+
+  async function fetchBuddyMessage(scenario, fallback) {
+    try {
+      const statusRes = await fetch("http://localhost:8000/session/status");
+      const status = statusRes.ok ? await statusRes.json() : {};
+      const task = status.task || "";
+      const elapsed = Math.round((status.elapsed_min || 0) * 60);
+      const drifts = status.drift_count || 0;
+
+      const params = new URLSearchParams({ scenario, task, elapsed_seconds: elapsed, drift_count: drifts });
+      const res = await fetch(`http://localhost:8000/buddy/message?${params}`);
+      if (!res.ok) return fallback;
+      const data = await res.json();
+      return data.message || fallback;
+    } catch {
+      return fallback;
+    }
+  }
 
   // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -242,15 +259,16 @@
     walkOut();
   }
 
-  function handleMotivation() {
-    const q = MOTIVATION_QUOTES[Math.floor(Math.random() * MOTIVATION_QUOTES.length)];
-    bubble.textContent = q;
+  async function handleMotivation() {
+    const fallback = FALLBACK_QUOTES[Math.floor(Math.random() * FALLBACK_QUOTES.length)];
+    const msg = await fetchBuddyMessage("motivation", fallback);
+    bubble.textContent = msg;
     hideActions();
     hideMenu();
     uiState = "present";
     showBubble();
     content.classList.add("visible");
-    walkOut(5000);
+    walkOut(5500);
   }
 
   function handleEndSession() {
@@ -284,8 +302,10 @@
         walkOut(6000);
 
       } else if (data.type === "session_started") {
-        walkIn("Let's focus! 💪 I'm here if you need me");
-        walkOut(4000);
+        fetchBuddyMessage("session_start", "okay, let's do this! I'm right here with you 💪").then(msg => {
+          walkIn(msg);
+          walkOut(4500);
+        });
 
       } else if (data.type === "session_summary") {
         walkIn("Great session! 🎉 Time to review how you did.");
@@ -322,9 +342,18 @@
   // Skip on distraction sites — the drift nudge from background.js shows instead
 
   if (!isDistractionSite) {
-    setTimeout(() => {
-      walkIn("Still on it 💪 I'm watching over you");
-      walkOut(4000);
+    setTimeout(async () => {
+      try {
+        const statusRes = await fetch("http://localhost:8000/session/status");
+        const status = statusRes.ok ? await statusRes.json() : {};
+        if (!status.active) return; // no session running — stay silent
+      } catch {
+        return; // backend offline — stay silent
+      }
+      const fallback = FALLBACK_QUOTES[Math.floor(Math.random() * FALLBACK_QUOTES.length)];
+      const msg = await fetchBuddyMessage("cheer", fallback);
+      walkIn(msg);
+      walkOut(4500);
     }, 1200);
   }
 
