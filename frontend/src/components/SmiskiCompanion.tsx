@@ -176,6 +176,7 @@ const SmiskiCompanion = ({
   const [isWalking, setIsWalking] = useState(false);
   const [isUrgent, setIsUrgent] = useState(false);
   const [isAlertActive, setIsAlertActive] = useState(false);
+  const hasDrifted = useRef(false);  // Track if user has drifted at least once
   const [bubbleText, setBubbleText] = useState("");
   const [showBubble, setShowBubble] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
@@ -273,7 +274,20 @@ const SmiskiCompanion = ({
     if (nudgeId == null || !nudgeText) return;
     if (buddyBusy.current) return;
 
+    // Check if this is an encouragement (not a drift)
+    const isEncouragement = nudgeText.includes("watching you") || nudgeText.includes("crushing it") || nudgeText.includes("doing great");
+
+    if (!isEncouragement) {
+      hasDrifted.current = true;  // Only drift nudges count
+    }
+
     const showNudge = () => {
+      if (isEncouragement) {
+        // Gentle encouragement -- no buttons, auto-dismiss in 5s
+        walkIn(nudgeText, false);
+        walkOut(5000);
+        return;
+      }
       walkIn(nudgeText, true);
       alertExitTimer.current = setTimeout(() => {
         setShowBubble(false);
@@ -525,17 +539,19 @@ const SmiskiCompanion = ({
                 transition={{ delay: 0.1, duration: 0.2 }}
                 className="pointer-events-auto flex flex-col gap-1.5"
               >
+                {hasDrifted.current && (
+                  <button
+                    onClick={handleTakeBreak}
+                    className="rounded-xl bg-card border border-border px-3 py-2 text-xs font-medium text-foreground hover:bg-secondary transition-colors shadow-sm text-left"
+                  >
+                    Take a break
+                  </button>
+                )}
                 <button
-                  onClick={handleTakeBreak}
-                  className="rounded-xl bg-card border border-border px-3 py-2 text-xs font-medium text-foreground hover:bg-secondary transition-colors shadow-sm text-left"
-                >
-                  Take a break
-                </button>
-                <button
-                  onClick={handlePullBack}
+                  onClick={hasDrifted.current ? handlePullBack : () => { walkOut(); }}
                   className="btn-primary-action rounded-xl px-3 py-2 text-xs font-semibold shadow-sm"
                 >
-                  Pull me back
+                  {hasDrifted.current ? "Pull me back" : "Let's go!"}
                 </button>
               </motion.div>
             )}

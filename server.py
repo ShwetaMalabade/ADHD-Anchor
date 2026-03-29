@@ -1255,7 +1255,20 @@ async def monitoring_loop():
                 await broadcast({"type": "status", "value": "focused"})
                 print(f"  [MONITOR] [{elapsed}m] RELEVANT: {title[:60]}")
 
+                # Track consecutive relevant visits -- every 5th time, say "I'm watching you"
+                session_state["relevant_streak"] = session_state.get("relevant_streak", 0) + 1
+                if session_state["relevant_streak"] % 5 == 0 and session_state["relevant_streak"] > 0:
+                    encouragements = [
+                        "I'm watching you... and you're crushing it!",
+                        "Still here, still focused. You're doing great!",
+                        "5 tabs in a row on task. I see you!",
+                    ]
+                    msg = random.choice(encouragements)
+                    print(f"  [MONITOR] Encouragement after {session_state['relevant_streak']} relevant tabs")
+                    await nudge_and_speak({"action": "speak", "message": msg}, {"nudge_type": "encouragement"})
+
             elif verdict == "drift":
+                session_state["relevant_streak"] = 0  # Reset streak on drift
                 add_observation(f"Window: {title} --> drift ({confidence:.0%}). Reason: {reason}.")
                 print(f"  [MONITOR] [{elapsed}m] DRIFT: {title[:60]}", flush=True)
 
@@ -1407,26 +1420,36 @@ async def monitoring_loop():
                     nudge_count = session_state.get("initiation_nudge_count", 0)
                     task = session_state.get("task", "your task")
 
-                    # Short, casual messages -- like a friend talking
-                    first_nudges = [
-                        f"Hey! Let's open {task}.",
-                        f"Time for {task}. Open it up!",
-                        f"Ready? Let's start {task}.",
-                    ]
+                    # Check if user is on Anchor screen
+                    is_on_anchor = "anchor" in title.lower() or "stay focused" in title.lower()
+
+                    # Short, casual messages -- context-aware, natural phrasing
+                    if is_on_anchor and nudge_count == 0:
+                        first_nudges = [
+                            f"I see you're still here with me. Let's get started -- {task}!",
+                            f"You're on Anchor, great! Time to switch and start {task}.",
+                            f"Ready to go? Let's do this -- {task}!",
+                        ]
+                    else:
+                        first_nudges = [
+                            f"Hey! Time to start {task}.",
+                            f"Let's go -- {task}!",
+                            f"Ready? {task} is waiting for you.",
+                        ]
                     second_nudges = [
-                        f"Still here. Just open {task} -- that's all.",
-                        f"Starting is the hard part. Just open it.",
-                        f"One click. Open {task}. That's it.",
+                        f"Still haven't started. Just {task} -- that's all.",
+                        f"Starting is the hard part. Just begin.",
+                        f"One step. Start {task}. That's it.",
                     ]
                     third_nudges = [
                         f"What's blocking you on {task}?",
-                        f"Peek at {task} for 10 seconds. No pressure.",
-                        f"Just look at it. Don't even start yet.",
+                        f"Just look at it for 10 seconds. No pressure.",
+                        f"Don't even start yet. Just open it.",
                     ]
                     later_nudges = [
-                        f"Still here? Open {task}. I believe in you.",
+                        f"Still here? {task}. I believe in you.",
                         f"One tiny move toward {task}. That's enough.",
-                        f"Come on, just open {task}. You got this.",
+                        f"Come on, you got this. {task}.",
                     ]
                     if nudge_count == 0:
                         message = random.choice(first_nudges)
