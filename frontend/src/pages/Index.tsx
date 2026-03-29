@@ -408,7 +408,7 @@ const Index = () => {
   return (
     <div className="min-h-screen bg-background">
       <BackgroundBlob />
-      {(screen === "focusing" || screen === "break" || screen === "summary") && (
+      {(screen === "focusing" || screen === "break") && (
         <DemoLog entries={sessionLog} notes={notes} isListening={isListeningForNotes} onDeleteNote={deleteNote} />
       )}
       <SmiskiCompanion
@@ -478,6 +478,8 @@ const Index = () => {
               avgReturnTimeMinutes: 2,
               timeline: finalTimeline,
             }}
+            notes={notes}
+            task={task}
             onNewSession={resetSession}
             onDone={() => { resetSession(); setScreen("done"); }}
           />
