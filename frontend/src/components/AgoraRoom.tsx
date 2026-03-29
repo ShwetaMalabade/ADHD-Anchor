@@ -7,8 +7,8 @@ import AgoraRTC, {
 } from "agora-rtc-sdk-ng";
 
 const AGORA_APP_ID = "a6ec6f8912664496baa13238a3ec20ca";
-const CHANNEL_NAME = "study_room_anchor";
-const AGORA_TEMP_TOKEN = "007eJxTYOjLkYifn7dSI6vva0902qrFDq+XymzNPGOx57Og+LaTN6cqMCSapSabpVlYGhqZmZmYWJolJSYaGhsZWyQapyYbGSQn1pqfyGwIZGQQnL2KlZEBAsF8huKS0pTK+KL8/Nz4xLzkjPwiBgYAYLAlyg==";
+const CHANNEL_NAME = "anchor-token";
+const AGORA_TEMP_TOKEN = "007eJxTYFB4rXulov3t97e25189uJW2+uYs/cTFU/e58e+xytfdtiNVgSHN0tjAwMjQ1NLMyNwk0TgtyTjZ2MjA2CApOcXYyNLc0IXrZGZDICPDP5XjDIxQCOLzMCTmJWfkF8WX5Gen5jEwAAAv/CSY";
 const BACKEND_WS = "ws://localhost:8000/ws-audio";
 
 interface AgoraRoomProps {
@@ -138,35 +138,36 @@ const AgoraRoom = ({ onUserSpeech }: AgoraRoomProps) => {
   }, []);
 
   const joinChannel = useCallback(async () => {
-    try {
-      // Connect audio WS for STT
-      connectAudioWs();
+    // Connect audio WS for STT
+    connectAudioWs();
 
-      // Join Agora
+    // Try Agora in background -- don't let it block the join
+    try {
       const client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
       clientRef.current = client;
-
-      await client.join(AGORA_APP_ID, CHANNEL_NAME, AGORA_TEMP_TOKEN, null);
-      console.log("[AGORA] Joined channel:", CHANNEL_NAME);
-
-      // Create and publish mic track
-      const micTrack = await AgoraRTC.createMicrophoneAudioTrack({
-        AEC: true,   // Acoustic echo cancellation
-        ANS: true,   // Automatic noise suppression
-        AGC: true,   // Automatic gain control
-      });
-      micTrackRef.current = micTrack;
-      await client.publish([micTrack]);
-      console.log("[AGORA] Mic published");
-
-      setJoined(true);
-      setMicOn(true);
-
-      // Start recording for STT
-      setTimeout(() => startRecording(), 500);
+      client.join(AGORA_APP_ID, CHANNEL_NAME, AGORA_TEMP_TOKEN, null)
+        .then(async () => {
+          console.log("[AGORA] Joined channel:", CHANNEL_NAME);
+          try {
+            const micTrack = await AgoraRTC.createMicrophoneAudioTrack({ AEC: true, ANS: true, AGC: true });
+            micTrackRef.current = micTrack;
+            await client.publish([micTrack]);
+            console.log("[AGORA] Mic published");
+          } catch (e) { console.warn("[AGORA] Mic track failed:", e); }
+        })
+        .catch((err: unknown) => {
+          console.warn("[AGORA] Join failed (using mic-only):", err);
+          clientRef.current = null;
+        });
     } catch (err) {
-      console.error("[AGORA] Join failed:", err);
+      console.warn("[AGORA] Client create failed:", err);
+      clientRef.current = null;
     }
+
+    // Always join immediately -- mic recording works without Agora
+    setJoined(true);
+    setMicOn(true);
+    setTimeout(() => startRecording(), 500);
   }, [connectAudioWs, startRecording]);
 
   const leaveChannel = useCallback(async () => {

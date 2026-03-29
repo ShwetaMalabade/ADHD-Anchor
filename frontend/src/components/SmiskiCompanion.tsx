@@ -7,7 +7,6 @@ type SmiskiState = "hidden" | "present" | "menu";
 interface Props {
   nudgeText?: string;
   nudgeId?: number;
-  nudgeType?: string;
   noteEvent?: { text: string; id: number } | null;
   buddyPromptEvent?: { id: number } | null;
   buddyAckEvent?: { text: string; id: number } | null;
@@ -164,7 +163,6 @@ function generateAckFromReply(reply: string): string {
 const SmiskiCompanion = ({
   nudgeText,
   nudgeId,
-  nudgeType,
   noteEvent,
   buddyPromptEvent,
   buddyAckEvent,
@@ -181,7 +179,6 @@ const SmiskiCompanion = ({
   const [bubbleText, setBubbleText] = useState("");
   const [showBubble, setShowBubble] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
-  const [currentNudgeType, setCurrentNudgeType] = useState<string | undefined>();
 
   const stateRef = useRef<SmiskiState>("hidden");
   const setSmiskiState = (s: SmiskiState) => {
@@ -235,15 +232,14 @@ const SmiskiCompanion = ({
 
   // ── Effects ───────────────────────────────────────────────────────────────
 
-  // Mount greeting — just peek out before session (no full walk-in)
+  // Mount greeting
   useEffect(() => {
     if (hasGreeted.current || suppressMountGreeting) return;
     hasGreeted.current = true;
     setTimeout(() => {
-      // Just peek — don't show bubble or full body pre-session
-      setSmiskiState("present");
-      walkOut(3000);
-    }, 3000);
+      walkIn("Hi! I'm your focus buddy ✨ I'll keep you on track today");
+      walkOut(5000);
+    }, 11500);
   }, []);
 
   // Session start
@@ -251,7 +247,7 @@ const SmiskiCompanion = ({
     if (sessionActive && !prevSessionActive.current) {
       prevSessionActive.current = true;
       walkIn("Let's focus! 💪 I'm here if you need me");
-      walkOut(3000);
+      walkOut(4000);
     }
     if (!sessionActive) prevSessionActive.current = false;
   }, [sessionActive]);
@@ -267,29 +263,40 @@ const SmiskiCompanion = ({
       const q = MOTIVATION_QUOTES[Math.floor(Math.random() * MOTIVATION_QUOTES.length)];
       walkIn(q);
       walkOut(5500);
-    }, 2 * 60 * 1000);  // 2 min (demo)
+    }, 10 * 60 * 1000);
     return () => { if (quoteInterval.current) clearInterval(quoteInterval.current); };
   }, [sessionActive]);
 
   // Nudge / drift alert — skip if buddy conversation is in progress
+  // Only start auto-dismiss timer when tab is visible so user actually sees it
   useEffect(() => {
     if (nudgeId == null || !nudgeText) return;
     if (buddyBusy.current) return;
-    setCurrentNudgeType(nudgeType);
-    const isGentle = nudgeType === "task_initiation" || nudgeType === "encouragement";
-    walkIn(nudgeText, !isGentle);
-    if (isGentle) {
-      if (nudgeType === "task_initiation") {
-        setIsAlertActive(true);
-      }
-      walkOut(6000);
+
+    const showNudge = () => {
+      walkIn(nudgeText, true);
+      alertExitTimer.current = setTimeout(() => {
+        setShowBubble(false);
+        setIsAlertActive(false);
+        walkOut(200);
+      }, 20000);
+    };
+
+    if (document.visibilityState === "visible") {
+      // Tab is visible -- show immediately
+      showNudge();
+    } else {
+      // Tab is hidden (user is on drift app) -- wait until they come back
+      const onVisible = () => {
+        if (document.visibilityState === "visible") {
+          document.removeEventListener("visibilitychange", onVisible);
+          showNudge();
+        }
+      };
+      document.addEventListener("visibilitychange", onVisible);
+      return () => document.removeEventListener("visibilitychange", onVisible);
     }
-    alertExitTimer.current = setTimeout(() => {
-      setShowBubble(false);
-      setIsAlertActive(false);
-      setCurrentNudgeType(undefined);
-      walkOut(200);
-    }, 20000);
+
     return () => { if (alertExitTimer.current) clearTimeout(alertExitTimer.current); };
   }, [nudgeId]);
 
@@ -353,19 +360,7 @@ const SmiskiCompanion = ({
 
     const prompt = BUDDY_PROMPTS[Math.floor(Math.random() * BUDDY_PROMPTS.length)];
     walkIn(prompt);
-
-    // Safety timeout: if user never responds within 30s, release lock and walk out
-    const safetyTimer = setTimeout(() => {
-      if (buddyBusy.current) {
-        buddyBusy.current = false;
-        walkOut(200);
-      }
-    }, 30000);
-    noteTimers.current.push(safetyTimer);
-
-    return () => {
-      clearTimeout(safetyTimer);
-    };
+    // Stay visible while waiting for user's note (no auto-dismiss)
   }, [buddyPromptEvent?.id]);
 
   // Follow-up reply acknowledged — Smiski says ack and walks out
@@ -396,19 +391,8 @@ const SmiskiCompanion = ({
   const handleTabClick = () => {
     if (stateRef.current === "hidden") {
       if (exitTimer.current) clearTimeout(exitTimer.current);
-      if (sessionActive) {
-        // Full walk-in with menu during active session
-        setSmiskiState("present");
-        setTimeout(() => {
-          if (stateRef.current === "present" && sessionActive) {
-            setSmiskiState("menu");
-          }
-        }, 750);
-      } else {
-        // Before session: just peek in and say hi, then walk out
-        walkIn("Hey there! Start a session and I'll be your focus buddy 👋");
-        walkOut(3500);
-      }
+      setSmiskiState("present");
+      setTimeout(() => setSmiskiState("menu"), 750);
     } else {
       walkOut();
     }
@@ -436,9 +420,7 @@ const SmiskiCompanion = ({
 
   // ── Derived values ────────────────────────────────────────────────────────
 
-  // Before session: peek out less (only head visible). During session: full body
-  const characterX = smiskiState === "hidden" ? -86
-    : (!sessionActive && !showBubble ? -50 : 0);
+  const characterX = smiskiState === "hidden" ? -86 : 0;
 
   return (
     <>
@@ -543,42 +525,25 @@ const SmiskiCompanion = ({
                 transition={{ delay: 0.1, duration: 0.2 }}
                 className="pointer-events-auto flex flex-col gap-1.5"
               >
-                {currentNudgeType === "task_initiation" ? (
-                  <button
-                    onClick={() => {
-                      if (alertExitTimer.current) clearTimeout(alertExitTimer.current);
-                      setIsAlertActive(false);
-                      setCurrentNudgeType(undefined);
-                      onPullBack();
-                      walkOut();
-                    }}
-                    className="btn-primary-action rounded-xl px-3 py-2 text-xs font-semibold shadow-sm"
-                  >
-                    I'm ready
-                  </button>
-                ) : (
-                  <>
-                    <button
-                      onClick={handleTakeBreak}
-                      className="rounded-xl bg-card border border-border px-3 py-2 text-xs font-medium text-foreground hover:bg-secondary transition-colors shadow-sm text-left"
-                    >
-                      Take a break
-                    </button>
-                    <button
-                      onClick={handlePullBack}
-                      className="btn-primary-action rounded-xl px-3 py-2 text-xs font-semibold shadow-sm"
-                    >
-                      Pull me back
-                    </button>
-                  </>
-                )}
+                <button
+                  onClick={handleTakeBreak}
+                  className="rounded-xl bg-card border border-border px-3 py-2 text-xs font-medium text-foreground hover:bg-secondary transition-colors shadow-sm text-left"
+                >
+                  Take a break
+                </button>
+                <button
+                  onClick={handlePullBack}
+                  className="btn-primary-action rounded-xl px-3 py-2 text-xs font-semibold shadow-sm"
+                >
+                  Pull me back
+                </button>
               </motion.div>
             )}
           </AnimatePresence>
 
-          {/* Menu panel — only during active session */}
+          {/* Menu panel */}
           <AnimatePresence>
-            {smiskiState === "menu" && sessionActive && (
+            {smiskiState === "menu" && (
               <motion.div
                 key="smiski-menu"
                 initial={{ opacity: 0, x: -12, scale: 0.92 }}

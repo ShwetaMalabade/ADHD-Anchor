@@ -124,9 +124,9 @@ const WelcomeScreen = ({ onComplete, onGreet }: Props) => {
   useEffect(() => {
     if (!cameraReady) return;
     const hour = new Date().getHours();
-    if (hour < 12) setGreeting("Good morning");
-    else if (hour < 17) setGreeting("Good afternoon");
-    else setGreeting("Good evening");
+    if (hour < 12) setGreeting("Hey there, ready to focus?");
+    else if (hour < 17) setGreeting("Hey, let's get things done!");
+    else setGreeting("Hey, time to lock in!");
     setTimeout(() => setShowGreeting(true), 500);
   }, [cameraReady]);
 
@@ -223,7 +223,7 @@ const WelcomeScreen = ({ onComplete, onGreet }: Props) => {
               >
                 <span className="text-sm">{micListening ? "🎤" : "🎙️"}</span>
                 <span className="text-xs text-white/80">
-                  Say <span className="font-semibold text-white">"Hi"</span> or raise your hand to start
+                  Say <span className="font-semibold text-white">"Hi"</span> to start
                 </span>
               </motion.div>
             </div>

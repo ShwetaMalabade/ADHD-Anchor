@@ -262,41 +262,63 @@
     chrome.runtime.sendMessage({ type: "user_action", action });
   }
 
-  // ── Backend event handler ─────────────────────────────────────────────────────
+  // ── Handle backend events (from background OR direct WebSocket) ────────────
 
+  function handleBackendEvent(data) {
+    if (data.type === "nudge" || data.type === "phone_detected") {
+      const text = data.message || "Hey, you drifted. Break or get back?";
+      walkIn(text, true);
+      if (alertExitTimer) clearTimeout(alertExitTimer);
+      alertExitTimer = setTimeout(() => {
+        hideBubble();
+        hideActions();
+        isAlertActive = false;
+        walkOut(200);
+      }, 20000);
+
+    } else if (data.type === "wave_detected") {
+      walkIn(data.message || "Hey! 👋 Great to see you! Ready to crush this session?");
+      walkOut(6000);
+
+    } else if (data.type === "session_started") {
+      walkIn("Let's focus! 💪 I'm here if you need me");
+      walkOut(4000);
+
+    } else if (data.type === "session_summary") {
+      walkIn("Great session! 🎉 Time to review how you did.");
+      walkOut(5000);
+    }
+  }
+
+  // Listen for events forwarded from background service worker
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg.type === "backend_event") {
-      const data = msg.payload;
-
-      if (data.type === "nudge" && data.nudge_type === "encouragement") {
-        walkIn(data.message || "Still on it 💪 I'm watching over you");
-        walkOut(5000);
-
-      } else if (data.type === "nudge" || data.type === "phone_detected") {
-        const source = data.source || "something";
-        const text = data.message || `Hey, you drifted to ${source}. Break or get back?`;
-        walkIn(text, true);
-        alertExitTimer = setTimeout(() => {
-          hideBubble();
-          hideActions();
-          isAlertActive = false;
-          walkOut(200);
-        }, 20000);
-
-      } else if (data.type === "wave_detected") {
-        walkIn(data.message || "Hey! 👋 Great to see you! Ready to crush this session?");
-        walkOut(6000);
-
-      } else if (data.type === "session_started") {
-        walkIn("Let's focus! 💪 I'm here if you need me");
-        walkOut(4000);
-
-      } else if (data.type === "session_summary") {
-        walkIn("Great session! 🎉 Time to review how you did.");
-        walkOut(5000);
-      }
+      handleBackendEvent(msg.payload);
     }
   });
+
+  // Direct WebSocket fallback -- background service worker can go to sleep in MV3
+  let directWs = null;
+  function connectDirectWS() {
+    if (directWs && (directWs.readyState === WebSocket.OPEN || directWs.readyState === WebSocket.CONNECTING)) return;
+    try {
+      directWs = new WebSocket("ws://localhost:8000/ws");
+      directWs.onmessage = (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          handleBackendEvent(data);
+        } catch {}
+      };
+      directWs.onclose = () => {
+        directWs = null;
+        setTimeout(connectDirectWS, 5000);
+      };
+      directWs.onerror = () => {};
+    } catch {
+      setTimeout(connectDirectWS, 5000);
+    }
+  }
+  connectDirectWS();
 
   // ── Report current page to background ────────────────────────────────────────
 
@@ -325,8 +347,11 @@
   // ── Greeting on first load ────────────────────────────────────────────────────
   // Skip on distraction sites — the drift nudge from background.js shows instead
 
-  // Encouragement on relevant pages is handled by the backend (every 5th tab).
-  // The backend sends a nudge with nudge_type="encouragement" which the
-  // backend_event handler above forwards to Smiski.
+  if (!isDistractionSite) {
+    setTimeout(() => {
+      walkIn("Still on it 💪 I'm watching over you");
+      walkOut(4000);
+    }, 1200);
+  }
 
 })();
