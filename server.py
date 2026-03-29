@@ -409,7 +409,7 @@ LATEST EVENT:
 
 Based on the above, diagnose why the user is in this state and choose the right tool(s).
 If the user is focused on a task-relevant app, use NO tools (stay silent).
-If this is the very 1st drift AND no other issues, use NO tools (stay silent, let them self-correct).
+Even on the 1st drift, you MUST call speak_to_user to gently point out the drift.
 OTHERWISE YOU MUST CALL A TOOL. Specifically:
 - drift_count >= 2: MUST call speak_to_user or ask_user.
 - ever_on_task is False and elapsed >= 0.7: MUST call chunk_task or speak_to_user to help them start.
@@ -418,7 +418,8 @@ OTHERWISE YOU MUST CALL A TOOL. Specifically:
 - recent_nudges >= 3: MUST call suggest_break -- nagging makes ADHD worse.
 DO NOT just output text. You MUST call a tool or the user hears nothing.
 All messages must reference the user's actual task: "{session_state['task']}" and actual apps from history.
-If ever_on_task is False, say "you're on [actual app] -- ready to open your [task]?"
+If ever_on_task is False, say "you're on [actual app] -- ready to open your [task]?" or use countdown "3, 2, 1 let's go!"
+If ever_on_task is True, the user HAS already worked on their task before. Do NOT use task initiation language like "let's get started", "3, 2, 1", "ready to open your task?", or "let's begin". Instead, acknowledge they were working and gently redirect: "You were doing great on [task]. Ready to jump back in?" or "You stepped away from [task]. Need a break or want to get back?"
 NEVER repeat phrasing from previous nudges in the history."""
 
     # Try LangChain agent first
@@ -478,7 +479,7 @@ NEVER repeat phrasing from previous nudges in the history."""
 {agent_input}
 
 RULES:
-- 1st drift: stay_silent. 2nd drift: speak. 3rd+: MUST speak.
+- 1st drift: MUST speak gently. 2nd drift: speak more directly. 3rd+: escalate or suggest break.
 - 3+ nudges recently: suggest_break instead of another nudge.
 - Messages specific to user's task. Never generic.
 - ONLY reference apps from the session history.
@@ -638,14 +639,15 @@ DIAGNOSIS -- diagnose BEFORE choosing tool:
 * SILENT DRIFT: No keyboard/mouse -> ask_user "still with me?"
 
 RULES:
-- 1st drift: NO tools. Stay silent. Chance to self-correct.
+- 1st drift: MUST use speak_to_user after detecting the drift. Gently point out they drifted.
 - 2nd drift: speak_to_user with gentle nudge.
 - 3rd+ drift: MUST use tool. Diagnose and pick right one.
 - 3+ nudges in 5 min: ALWAYS suggest_break. Nagging makes ADHD worse.
 - Messages MUST be specific to user's actual task. Never generic.
 - 1-2 sentences MAX. NEVER repeat same phrasing.
 - NEVER mention apps user hasn't visited. Use ACTUAL app names from history.
-- If ever_on_task is False: "you're on [actual app] -- ready to open your [task]?"
+- If ever_on_task is False: "you're on [actual app] -- ready to open your [task]?" or countdown "3, 2, 1 let's go!"
+- If ever_on_task is True: user already worked on their task. Do NOT say "let's get started", "3, 2, 1", or "ready to open?" -- instead say "You were making progress. Ready to jump back in?" or "Need a break or want to get back?"
 - Task chunking: forms="fill first field", reading="read abstract", coding="write function signature"
 - Acknowledge task tedium: "Forms are repetitive" / "Dense papers are hard"
 - Can chain tools: search_adhd_strategy then speak_to_user with findings.
@@ -779,14 +781,15 @@ DIAGNOSIS -- diagnose BEFORE choosing tool:
 * SILENT DRIFT: No keyboard/mouse -> ask_user "still with me?"
 
 RULES:
-- 1st drift: NO tools. Stay silent. Chance to self-correct.
+- 1st drift: MUST use speak_to_user after detecting the drift. Gently point out they drifted.
 - 2nd drift: speak_to_user with gentle nudge.
 - 3rd+ drift: MUST use tool. Diagnose and pick right one.
 - 3+ nudges in 5 min: ALWAYS suggest_break. Nagging makes ADHD worse.
 - Messages MUST be specific to user's actual task. Never generic.
 - 1-2 sentences MAX. NEVER repeat same phrasing.
 - NEVER mention apps user hasn't visited. Use ACTUAL app names from history.
-- If ever_on_task is False: "you're on [actual app] -- ready to open your [task]?"
+- If ever_on_task is False: "you're on [actual app] -- ready to open your [task]?" or "3, 2, 1 let's go!"
+- If ever_on_task is True: Do NOT use "let's get started" or "3, 2, 1" or "ready to open?" -- say "You were making progress. Ready to jump back in?"
 - Task chunking: forms="fill first field", reading="read abstract", coding="write function signature"
 - Acknowledge task tedium: "Forms are repetitive" / "Dense papers are hard"
 - Can chain tools: search_adhd_strategy then speak_to_user with findings.
@@ -1153,7 +1156,7 @@ async def monitoring_loop():
 
                     sustained_minutes = (time.time() - session_state["sustained_drift_start"]) / 60
 
-                    if sustained_minutes >= 1 and not session_state.get("sustained_drift_nudged"):
+                    if sustained_minutes >= 0.5 and not session_state.get("sustained_drift_nudged"):  # 30 seconds
                         event_summary = f"User has been on drift app '{last_title}' for {sustained_minutes:.1f} minutes without leaving."
                         print(f"  [MONITOR] Sustained drift: {sustained_minutes:.1f}min on {last_title[:40]}")
 
@@ -1194,7 +1197,7 @@ async def monitoring_loop():
                     })
                 session_state["idle_nudged"] = True
 
-            if not session_state.get("ever_on_task") and not session_state.get("task_initiation_nudged") and elapsed >= 1:
+            if not session_state.get("ever_on_task") and not session_state.get("task_initiation_nudged") and elapsed >= 0.67:  # ~40 seconds
                 event_summary = f"User has been in session for {elapsed} minutes but NEVER opened a task-relevant app. Task initiation paralysis."
                 print(f"  [MONITOR] Task initiation timeout: {elapsed}min, never on task")
 

@@ -108,7 +108,9 @@ const Index = () => {
             const verdictIcon = data.verdict === "relevant" ? "\u2705" : data.verdict === "drift" ? "\u{1F6A8}" : "\u{1F7E1}";
             const conf = data.confidence != null ? ` (${Math.round(data.confidence * 100)}%)` : "";
             addLog("window", verdictIcon, `${data.window || "Unknown window"} \u2192 ${data.verdict}${conf}`);
-            if (data.verdict === "drift") {
+            if (data.verdict === "relevant") {
+              everOnTaskRef.current = true;
+            } else if (data.verdict === "drift") {
               if (data.drift_count != null) setDriftCount(data.drift_count);
               const appName = (data.window || "").split(" - ")[0].trim() || "Unknown";
               setDriftTriggers((prev) => [...prev, appName]);
@@ -173,11 +175,14 @@ const Index = () => {
     return () => { if (driftTimer.current) clearTimeout(driftTimer.current); };
   }, [screen, isPaused, driftCount]);
 
-  // Show initiation nudge after 15s if still focusing
+  // Show initiation nudge after 15s ONLY if user never opened their task
+  // (backend handles this via task_initiation detection, so this is just
+  // a fallback for when WebSocket isn't connected)
+  const everOnTaskRef = useRef(false);
   useEffect(() => {
     if (screen !== "focusing") return;
     const t = setTimeout(() => {
-      if (nudge === "none" && focusStatus === "focused") {
+      if (nudge === "none" && !everOnTaskRef.current && !wsConnected.current) {
         setNudge("initiation");
       }
     }, 15000);
