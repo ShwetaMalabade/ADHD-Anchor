@@ -110,8 +110,6 @@ def camera_loop():
             frame = cv2.flip(frame, 1)
             activity, confidence, details, hand_result, pose_result, face_result = activity_detector.detect(frame)
             latest_activity = {"activity": activity, "confidence": confidence, "details": details}
-            pose_lms = pose_result.pose_landmarks[0] if pose_result.pose_landmarks else None
-            frame = blur_background(frame, pose_lms)
             if hand_result.hand_landmarks:
                 for hand_lms in hand_result.hand_landmarks:
                     draw_hand_landmarks(frame, hand_lms)

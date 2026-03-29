@@ -83,8 +83,15 @@ class ActivityDetector:
         self.activity_start_time = time.time()
         self.idle_start = None
 
-        # YOLO disabled — conflicts with MediaPipe Metal GPU on Apple Silicon
-        self.yolo = None
+        # YOLO for phone detection — run every N frames to reduce GPU contention
+        try:
+            self.yolo = YOLO("yolov8n.pt")
+            self.yolo.fuse()
+            print("[YOLO] Loading YOLOv8n model...")
+            print("[YOLO] Model ready.")
+        except Exception as e:
+            print(f"[YOLO] Failed to load: {e}")
+            self.yolo = None
         self.yolo_phone_detected = False
         self.yolo_frame_counter = 0
 
@@ -102,8 +109,18 @@ class ActivityDetector:
         pose_result = self.pose_landmarker.detect_for_video(mp_image, ts)
         face_result = self.face_landmarker.detect_for_video(mp_image, ts)
 
-        # YOLO disabled — using MediaPipe only for phone detection
-        self.yolo_phone_detected = False
+        # YOLO phone detection — run every 10 frames to avoid GPU contention
+        self.yolo_frame_counter += 1
+        if self.yolo and self.yolo_frame_counter % 10 == 0:
+            try:
+                results = self.yolo(frame, verbose=False, conf=0.4)
+                phone_class_id = 67  # COCO class 67 = cell phone
+                self.yolo_phone_detected = any(
+                    int(box.cls[0]) == phone_class_id
+                    for box in (results[0].boxes if results else [])
+                )
+            except Exception:
+                self.yolo_phone_detected = False
 
         activity, confidence, details = self._classify(hand_result, pose_result, face_result)
 
