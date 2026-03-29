@@ -17,6 +17,7 @@ import time
 import asyncio
 import subprocess
 import threading
+import random
 import cv2
 from datetime import datetime
 from collections import Counter
@@ -967,6 +968,8 @@ async def monitoring_loop():
     last_relevant_window = ""
     relevant_window_start = None
     last_window_change_time = time.time()
+    last_phone_nudge_time = 0
+    phone_detect_count = 0
 
     print("\n[MONITOR] Starting monitoring loop...")
 
@@ -1052,22 +1055,50 @@ async def monitoring_loop():
 
                 print(f"  [MONITOR] [{elapsed}m] DRIFT: {title[:60]}")
 
-                decision = anchor_agent_decide(event_summary)
+                # Known distraction sites get an immediate voice nudge
+                title_lower = title.lower()
+                known_distractions = ["youtube", "netflix", "reddit", "twitter", "x.com",
+                                      "instagram", "tiktok", "facebook", "twitch", "hulu", "discord"]
+                is_known_distraction = any(site in title_lower for site in known_distractions)
 
-                if decision["action"] != "stay_silent":
-                    print(f"  [AGENT] {decision['action'].upper()}: {decision['message']}")
-                    if not decision.get("already_spoken"):
-                        await speak(decision["message"])
+                if is_known_distraction:
+                    site_name = next((s for s in known_distractions if s in title_lower), "that site")
+                    site_name = site_name.capitalize()
+                    task = session_state.get("task", "your task")
+                    immediate_messages = [
+                        f"Hey, you just opened {site_name}. Let's get back to {task}!",
+                        f"Looks like you wandered to {site_name}. Ready to get back to {task}?",
+                        f"I see {site_name} is open. Remember, you're working on {task}!",
+                    ]
+                    message = random.choice(immediate_messages)
+                    print(f"  [MONITOR] Known distraction: {site_name} — immediate nudge")
+                    await speak(message)
                     await broadcast({
                         "type": "nudge",
-                        "nudge_type": decision["action"],
-                        "message": decision["message"],
-                        "options": decision.get("options", []),
+                        "nudge_type": "speak",
+                        "message": message,
+                        "source": site_name,
+                        "options": ["Pull me back", "Taking a break"],
                         "drift_count": session_state["drift_count"]
                     })
                     await broadcast({"type": "status", "value": "drifted"})
                 else:
-                    print(f"  [AGENT] Staying silent: {decision['reason']}")
+                    decision = anchor_agent_decide(event_summary)
+
+                    if decision["action"] != "stay_silent":
+                        print(f"  [AGENT] {decision['action'].upper()}: {decision['message']}")
+                        if not decision.get("already_spoken"):
+                            await speak(decision["message"])
+                        await broadcast({
+                            "type": "nudge",
+                            "nudge_type": decision["action"],
+                            "message": decision["message"],
+                            "options": decision.get("options", []),
+                            "drift_count": session_state["drift_count"]
+                        })
+                        await broadcast({"type": "status", "value": "drifted"})
+                    else:
+                        print(f"  [AGENT] Staying silent: {decision['reason']}")
 
             elif verdict == "unsure":
                 notification_note = " This was likely a NOTIFICATION PULL (app popped up on its own)." if is_notification_pull else ""
@@ -1198,6 +1229,40 @@ async def monitoring_loop():
                         "options": ["Take a break", "Keep going"]
                     })
                 session_state["last_break_time"] = time.time()
+
+        # ── Phone detection via webcam ──────────────────────────────
+        current_activity = latest_activity.get("activity", "")
+        current_confidence = latest_activity.get("confidence", 0)
+        time_since_phone_nudge = time.time() - last_phone_nudge_time
+
+        if (current_activity == "phone" and current_confidence >= 0.7
+                and not session_state.get("break_active")
+                and time_since_phone_nudge > 30):
+            phone_detect_count += 1
+            # Give them a moment — only nudge after 2+ consecutive detections
+            if phone_detect_count >= 2:
+                print(f"  [MONITOR] Phone detected! (confidence: {current_confidence:.0%}, count: {phone_detect_count})")
+                add_observation(f"Phone usage detected via webcam (confidence {current_confidence:.0%})", "phone_detected")
+
+                phone_messages = [
+                    f"Hey, looks like you picked up your phone. Your task '{session_state.get('task', 'work')}' is waiting for you!",
+                    f"Phone break? No worries — but let's get back to '{session_state.get('task', 'work')}' when you're ready.",
+                    f"I see you're on your phone. Want to get back to '{session_state.get('task', 'work')}'?",
+                ]
+                message = random.choice(phone_messages)
+
+                await speak(message)
+                await broadcast({
+                    "type": "phone_detected",
+                    "message": message,
+                    "source": "phone",
+                    "options": ["I'm back", "Taking a break"]
+                })
+                last_phone_nudge_time = time.time()
+                phone_detect_count = 0
+        else:
+            if current_activity != "phone":
+                phone_detect_count = 0
 
         await asyncio.sleep(5)
 
