@@ -86,8 +86,14 @@ class ActivityDetector:
         self.activity_start_time = time.time()
         self.idle_start = None
 
-        # YOLO disabled — causes segfault on Apple Silicon (Metal GPU conflict with MediaPipe)
-        self.yolo = None
+        # YOLO for phone detection — throttled to every 10 frames to avoid GPU contention
+        try:
+            self.yolo = YOLO("yolov8n.pt")
+            self.yolo.fuse()
+            print("[YOLO] Model loaded for phone detection.")
+        except Exception as e:
+            print(f"[YOLO] Failed to load: {e}")
+            self.yolo = None
         self.yolo_phone_detected = False
         self.yolo_frame_counter = 0
 

@@ -810,8 +810,28 @@ async def websocket_endpoint(websocket: WebSocket):
                     print(f'\n  [VOICE IN] User said: "{user_text}"')
                     add_observation(f'User said via voice: "{user_text}"', "user_voice")
 
-                    # Feed to agent for response
+                    text_lower = user_text.lower()
+                    comeback_phrases = [
+                        "come back", "i'm back", "okay", "got it", "i'll focus",
+                        "back to work", "on it", "let me focus", "sorry", "my bad",
+                        "i will come back", "yeah", "yes", "fine", "alright",
+                    ]
+                    is_comeback = any(phrase in text_lower for phrase in comeback_phrases)
+
+                    if is_comeback:
+                        print(f'  [VOICE] User acknowledged distraction: "{user_text}" — noted')
+                        add_observation(
+                            f'User acknowledged distraction and committed to return: "{user_text}"',
+                            "user_response",
+                        )
+                        await broadcast({"type": "status", "value": "focused"})
+
                     event_summary = f'User spoke via voice: "{user_text}". Respond to what they said in context of the session.'
+                    if is_comeback:
+                        event_summary += (
+                            " The user is acknowledging they got distracted and wants to come back."
+                            " Be encouraging and brief — don't lecture."
+                        )
                     decision = await anchor_agent_decide_async(event_summary)
                     if decision["action"] != "stay_silent":
                         print(f'  [AGENT] Responding to voice: {decision["message"]}')
