@@ -25,7 +25,7 @@ const WelcomeScreen = ({ onComplete, onGreet }: Props) => {
   const [cameraError, setCameraError] = useState(false);
   const [greeting, setGreeting] = useState("");
   const [showGreeting, setShowGreeting] = useState(false);
-  const [countdown, setCountdown] = useState(10);
+  const [countdown, setCountdown] = useState(5);
   const [fadeOut, setFadeOut] = useState(false);
   const [activity, setActivity] = useState<{ activity: string; confidence: number; details: Record<string, unknown> } | null>(null);
   const [greeted, setGreeted] = useState(false);

@@ -104,13 +104,28 @@ const Index = () => {
         const transcript = e.results[i][0].transcript.toLowerCase().trim();
         const raw = e.results[i][0].transcript.trim();
 
-        // "hey buddy" trigger — Smiski walks in and asks what to note
-        if (buddyMode.current === "idle" && /hey\s+buddy/i.test(transcript)) {
-          buddyMode.current = "awaiting_note";
-          buddyPromptCounter.current += 1;
-          setBuddyPromptEvent({ id: buddyPromptCounter.current });
-          addLog("response", "\u{1F44B}", "User: \"Hey buddy!\"");
-          continue;
+        // "hey buddy note X" — direct capture with buddy animation
+        if (buddyMode.current === "idle") {
+          const buddyNoteMatch = transcript.match(/hey\s+buddy\s+(?:please\s+)?note\s+(?:that\s+)?(.+)/i);
+          if (buddyNoteMatch && buddyNoteMatch[1]) {
+            const rawMatch = raw.match(/[Hh]ey\s+[Bb]uddy\s+(?:[Pp]lease\s+)?[Nn]ote\s+(?:[Tt]hat\s+)?(.+)/);
+            const noteText = rawMatch ? rawMatch[1] : buddyNoteMatch[1];
+            buddyPromptCounter.current += 1;
+            setBuddyPromptEvent({ id: buddyPromptCounter.current });
+            addNote(noteText.charAt(0).toUpperCase() + noteText.slice(1));
+            buddyMode.current = "awaiting_reply";
+            addLog("response", "\u{1F44B}", `User: "Hey buddy, note ${noteText}"`);
+            continue;
+          }
+
+          // "hey buddy" only — Smiski walks in and asks what to note
+          if (/hey\s+buddy/i.test(transcript)) {
+            buddyMode.current = "awaiting_note";
+            buddyPromptCounter.current += 1;
+            setBuddyPromptEvent({ id: buddyPromptCounter.current });
+            addLog("response", "\u{1F44B}", "User: \"Hey buddy!\"");
+            continue;
+          }
         }
 
         // Awaiting note content — capture whatever they say as the note
@@ -264,7 +279,7 @@ const Index = () => {
   useEffect(() => {
     if (screen !== "focusing" || isPaused) return;
     const scheduleDrift = () => {
-      const delay = 45000 + Math.random() * 90000;
+      const delay = 15000 + Math.random() * 15000;  // 15-30s (demo)
       driftTimer.current = setTimeout(() => {
         if (wsConnected.current) return;
         const isNotification = Math.random() > 0.6;
@@ -299,7 +314,7 @@ const Index = () => {
       if (nudge === "none" && !everOnTaskRef.current && !wsConnected.current) {
         setNudge("initiation");
       }
-    }, 15000);
+    }, 8000);  // 8s (demo)
     return () => clearTimeout(t);
   }, [screen]);
 
@@ -390,6 +405,12 @@ const Index = () => {
     buddyMode.current = "idle";
     setBuddyPromptEvent(null);
     setBuddyAckEvent(null);
+    noteIdCounter.current = 0;
+    logIdCounter.current = 0;
+    buddyPromptCounter.current = 0;
+    buddyAckCounter.current = 0;
+    nudgeCounter.current = 0;
+    everOnTaskRef.current = false;
   };
 
   const finalTimeline = timeline.length > 0 ? timeline : [

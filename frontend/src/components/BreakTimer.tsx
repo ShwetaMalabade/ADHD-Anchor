@@ -9,7 +9,7 @@ interface Props {
 const RADIUS = 45;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 
-const BreakTimer = ({ durationSeconds = 300, onBreakEnd }: Props) => {
+const BreakTimer = ({ durationSeconds = 60, onBreakEnd }: Props) => {
   const [remaining, setRemaining] = useState(durationSeconds);
 
   useEffect(() => {

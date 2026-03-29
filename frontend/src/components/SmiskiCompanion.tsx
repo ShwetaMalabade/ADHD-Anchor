@@ -232,14 +232,15 @@ const SmiskiCompanion = ({
 
   // ── Effects ───────────────────────────────────────────────────────────────
 
-  // Mount greeting
+  // Mount greeting — just peek out before session (no full walk-in)
   useEffect(() => {
     if (hasGreeted.current || suppressMountGreeting) return;
     hasGreeted.current = true;
     setTimeout(() => {
-      walkIn("Hi! I'm your focus buddy ✨ I'll keep you on track today");
-      walkOut(5000);
-    }, 11500);
+      // Just peek — don't show bubble or full body pre-session
+      setSmiskiState("present");
+      walkOut(3000);
+    }, 3000);
   }, []);
 
   // Session start
@@ -247,7 +248,7 @@ const SmiskiCompanion = ({
     if (sessionActive && !prevSessionActive.current) {
       prevSessionActive.current = true;
       walkIn("Let's focus! 💪 I'm here if you need me");
-      walkOut(4000);
+      walkOut(3000);
     }
     if (!sessionActive) prevSessionActive.current = false;
   }, [sessionActive]);
@@ -263,7 +264,7 @@ const SmiskiCompanion = ({
       const q = MOTIVATION_QUOTES[Math.floor(Math.random() * MOTIVATION_QUOTES.length)];
       walkIn(q);
       walkOut(5500);
-    }, 10 * 60 * 1000);
+    }, 2 * 60 * 1000);  // 2 min (demo)
     return () => { if (quoteInterval.current) clearInterval(quoteInterval.current); };
   }, [sessionActive]);
 
@@ -340,7 +341,19 @@ const SmiskiCompanion = ({
 
     const prompt = BUDDY_PROMPTS[Math.floor(Math.random() * BUDDY_PROMPTS.length)];
     walkIn(prompt);
-    // Stay visible while waiting for user's note (no auto-dismiss)
+
+    // Safety timeout: if user never responds within 30s, release lock and walk out
+    const safetyTimer = setTimeout(() => {
+      if (buddyBusy.current) {
+        buddyBusy.current = false;
+        walkOut(200);
+      }
+    }, 30000);
+    noteTimers.current.push(safetyTimer);
+
+    return () => {
+      clearTimeout(safetyTimer);
+    };
   }, [buddyPromptEvent?.id]);
 
   // Follow-up reply acknowledged — Smiski says ack and walks out
@@ -371,8 +384,19 @@ const SmiskiCompanion = ({
   const handleTabClick = () => {
     if (stateRef.current === "hidden") {
       if (exitTimer.current) clearTimeout(exitTimer.current);
-      setSmiskiState("present");
-      setTimeout(() => setSmiskiState("menu"), 750);
+      if (sessionActive) {
+        // Full walk-in with menu during active session
+        setSmiskiState("present");
+        setTimeout(() => {
+          if (stateRef.current === "present" && sessionActive) {
+            setSmiskiState("menu");
+          }
+        }, 750);
+      } else {
+        // Before session: just peek in and say hi, then walk out
+        walkIn("Hey there! Start a session and I'll be your focus buddy 👋");
+        walkOut(3500);
+      }
     } else {
       walkOut();
     }
@@ -400,7 +424,9 @@ const SmiskiCompanion = ({
 
   // ── Derived values ────────────────────────────────────────────────────────
 
-  const characterX = smiskiState === "hidden" ? -86 : 0;
+  // Before session: peek out less (only head visible). During session: full body
+  const characterX = smiskiState === "hidden" ? -86
+    : (!sessionActive && !showBubble ? -50 : 0);
 
   return (
     <>
@@ -521,9 +547,9 @@ const SmiskiCompanion = ({
             )}
           </AnimatePresence>
 
-          {/* Menu panel */}
+          {/* Menu panel — only during active session */}
           <AnimatePresence>
-            {smiskiState === "menu" && (
+            {smiskiState === "menu" && sessionActive && (
               <motion.div
                 key="smiski-menu"
                 initial={{ opacity: 0, x: -12, scale: 0.92 }}

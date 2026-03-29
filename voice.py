@@ -14,9 +14,9 @@ load_dotenv()
 # Initialize ElevenLabs
 client = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
 
-# Voice ID for "Roger - Laid-Back, Casual"
-# You can change this to any voice you like from elevenlabs.io/voices
-VOICE_ID = "CwhRBWXzGAHq8TQ4Fs17"  # Roger
+# VOICE_ID = "CwhRBWXzGAHq8TQ4Fs17"  # Roger - Laid-Back, Casual
+# VOICE_ID = "jqcCZkN6Knx8BJ5TBdYR"
+VOICE_ID = "XcXEQzuLXRU9RcfWzEJt"
 
 def speak(text: str):
     """Generate and play speech"""
