@@ -8,65 +8,77 @@ ADHD Anchor is an AI-powered focus assistant designed to help people with ADHD s
 
 ## Architecture
 
-The system has two main parts:
+The system has three main parts:
 
 **Python Backend** (`server.py`) -- FastAPI server that runs the full pipeline:
-1. **Window Watcher** -- reads macOS active window title via `osascript` (AppleScript)
-2. **Classifier** -- Gemini 2.5 Flash classifies windows as `relevant`, `drift`, or `unsure` relative to the user's declared task
-3. **LangChain Agent** -- Gemini-powered agent with 6 tools (`speak_to_user`, `ask_user`, `suggest_break`, `chunk_task`, `search_adhd_strategy`, `suggest_dnd`) that reasons over full session history to decide interventions
-4. **Voice** -- ElevenLabs TTS for spoken nudges
-5. **Activity Monitor** (`activity_monitor.py`) -- MediaPipe-based webcam activity detection (typing, idle, phone, away) using hand/pose/face landmarks
-6. **WebSocket** -- pushes events to the React frontend in real-time
-7. **Input Tracking** -- pynput for keyboard/mouse activity detection
+1. **Window Watcher** -- reads active window title via `osascript` (macOS) or `win32gui` (Windows)
+2. **Classifier** -- Gemini 2.5 Flash classifies windows as `relevant`, `drift`, or `unsure` relative to the user's declared task; results cached per window title
+3. **LangChain Agent** -- Gemini-powered agent with 6 tools (`speak_to_user`, `ask_user`, `suggest_break`, `chunk_task`, `search_adhd_strategy`, `suggest_dnd`) that reasons over full session history. Falls back to direct Gemini call if LangChain fails.
+4. **Voice** -- ElevenLabs TTS (Roger voice) for spoken nudges; ElevenLabs Scribe v1 STT for voice input via `/ws-audio`
+5. **Activity Monitor** (`activity_monitor.py`) -- MediaPipe Tasks API (hand/pose/face landmarkers) detects states: `focused`, `typing`, `idle`, `phone`, `phone_scrolling`, `looking_down`, `away`. YOLO disabled due to Metal GPU conflicts on Apple Silicon.
+6. **WebSocket** (`/ws`) -- pushes session events to frontend in real-time
+7. **Input Tracking** -- pynput keyboard/mouse listeners run in background threads
 
 **React Frontend** (`frontend/`) -- Vite + React + TypeScript + shadcn/ui + Tailwind CSS:
-- Single-page app with session flow: Start -> DND prompt -> Focusing -> Break -> Summary
-- Components: `SessionStart`, `DNDPrompt`, `FocusWidget`, `NudgeOverlay`, `BreakTimer`, `SessionSummary`, `AgoraRoom` (voice)
-- Currently simulates drift events client-side; connects to backend via WebSocket
+- Session flow: `welcome` → `start` → `dnd` → `focusing` → `break` → `summary` → `done`
+- Key page: `src/pages/Index.tsx` -- manages all session state, WebSocket connection, and audio WebSocket
+- Components in `src/components/`: `SessionStart`, `DNDPrompt`, `FocusWidget`, `NudgeOverlay`, `BreakTimer`, `TaskInitiationNudge`, `SessionSummary`, `AgoraRoom` (Agora RTC voice), `SmiskiCompanion`
 
-**Standalone scripts** (for testing individual pipeline stages):
-- `classifier.py` -- live classifier test (watches screen, classifies windows)
-- `anchor_agent.py` -- full pipeline test without server (watcher + classifier + agent)
-- `voice.py` -- ElevenLabs voice output test
-- `test_window_reader.py` -- permission check for macOS window reading
+**Chrome Extension** (`chrome-extension/`) -- Browser companion with background service worker, content script injection, and Smiski companion overlay. Wires into backend session state.
+
+**Standalone test scripts**:
+- `classifier.py` -- live window classification test
+- `anchor_agent.py` -- full pipeline test (watcher + classifier + agent, no server)
+- `voice.py` -- ElevenLabs TTS test
+- `test_window_reader.py` -- macOS Accessibility permission check
 
 ## Commands
 
 ### Backend
 ```bash
-# Install Python dependencies
-pip install fastapi uvicorn google-genai elevenlabs python-dotenv pynput langchain langchain-google-genai langchain-community tavily-python
-
-# Run the server
-python server.py
+pip install -r requirements.txt
+python server.py   # http://localhost:8000
 ```
 
 ### Frontend
 ```bash
 cd frontend
 npm install        # or: bun install
-npm run dev        # Vite dev server
-npm run build      # Production build
-npm run lint       # ESLint
+npm run dev        # Vite dev server at http://localhost:5173
+npm run build
+npm run lint
 npm run test       # Vitest (run once)
 npm run test:watch # Vitest (watch mode)
 ```
 
+## API Endpoints
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/session/start` | Start focus session (`task`, `duration`, `dnd`, `session_type`) |
+| POST | `/session/end` | End session, returns summary |
+| GET | `/session/status` | Current session state |
+| WS | `/ws` | Real-time event stream to frontend |
+| WS | `/ws-audio` | Receive mic audio chunks for STT |
+| GET | `/video_feed` | MJPEG webcam stream |
+| GET | `/activity` | Current activity detection state |
+| POST | `/camera/start` / `/camera/stop` | Toggle webcam monitoring |
+
 ## Required Environment Variables
 
 Set in `.env` at project root:
-- `GEMINI_API_KEY` -- required for classifier and agent (Gemini 2.5 Flash)
-- `ELEVENLABS_API_KEY` -- required for voice output
-- `TAVILY_API_KEY` -- optional, enables the `search_adhd_strategy` tool
+- `GEMINI_API_KEY` -- required (Gemini 2.5 Flash for classifier and agent)
+- `ELEVENLABS_API_KEY` -- required (TTS/STT)
+- `TAVILY_API_KEY` -- optional, enables `search_adhd_strategy` tool
 
 ## macOS Permissions
 
-The window watcher requires **Accessibility** permission for your Terminal/IDE in System Settings > Privacy & Security > Accessibility. The activity monitor requires **Camera** permission.
+- **Accessibility** (System Settings > Privacy & Security > Accessibility) -- required for window title reading
+- **Camera** -- required for activity monitor
 
 ## Key Design Decisions
 
-- Window classification uses content/title analysis, not just app name (e.g., "YouTube - MIT lecture" can be relevant)
-- The agent uses progressive cooldown for nudges (30s -> 60s -> 120s -> 300s) to avoid nagging
-- First drift is always silent (chance to self-correct); intervention escalates from 2nd drift onward
-- Classification results are cached per window title to avoid redundant API calls
-- The agent is ADHD-aware: understands executive function depletion, task initiation paralysis, hyperfocus risks
+- Window classification uses full title, not just app name ("YouTube - MIT lecture" = relevant; "YouTube - best headphones" = drift)
+- Intervention escalation: 1st drift = silent; 2nd drift = gentle nudge; 3rd+ = must use a tool
+- Progressive cooldown: 30s → 60s → 120s → 300s to avoid nagging; 3+ nudges in 5 min triggers break suggestion
+- Agent is ADHD-aware: models Barkley's fuel tank, task initiation paralysis, hyperfocus risks

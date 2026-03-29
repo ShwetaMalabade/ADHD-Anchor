@@ -1,0 +1,552 @@
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,'Segoe UI',sans-serif;background:#FAFAF7;color:#2C2C2A;padding:32px 24px;line-height:1.6}
+.container{max-width:820px;margin:0 auto}
+
+h1{text-align:center;font-size:28px;font-weight:600;color:#1B3A5C;margin-bottom:4px}
+.subtitle{text-align:center;font-size:16px;color:#888;margin-bottom:8px}
+.tagline{text-align:center;font-size:14px;color:#aaa;margin-bottom:40px;font-style:italic}
+
+.phase{margin-bottom:48px}
+.phase-header{display:flex;align-items:center;gap:12px;margin-bottom:20px;padding-bottom:8px;border-bottom:2px solid}
+.phase-number{width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:15px;color:white;flex-shrink:0}
+.phase-title{font-size:20px;font-weight:600}
+.phase-desc{font-size:13px;color:#888;margin-top:2px}
+
+.step{display:flex;gap:16px;margin-bottom:16px;margin-left:18px;position:relative}
+.step::before{content:'';position:absolute;left:0;top:32px;bottom:-16px;width:2px;background:#E0DED8}
+.step:last-child::before{display:none}
+.step-dot{width:18px;height:18px;border-radius:50%;border:3px solid;flex-shrink:0;margin-top:6px;background:white;position:relative;z-index:1}
+.step-content{flex:1;background:white;border-radius:12px;padding:16px 20px;border:1px solid #E8E6E0;box-shadow:0 1px 3px rgba(0,0,0,0.04)}
+.step-title{font-weight:600;font-size:15px;margin-bottom:4px;display:flex;align-items:center;gap:8px}
+.step-body{font-size:13.5px;color:#555;line-height:1.65}
+.step-body strong{color:#333}
+.step-example{background:#F5F3EE;border-radius:8px;padding:10px 14px;margin-top:8px;font-size:12.5px;font-family:'SF Mono',monospace;color:#555;border-left:3px solid}
+.step-tech{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.tech-tag{font-size:11px;padding:3px 10px;border-radius:12px;font-weight:500}
+
+/* Phase colors */
+.phase-setup .phase-header{border-color:#1D9E75}
+.phase-setup .phase-number{background:#1D9E75}
+.phase-setup .step-dot{border-color:#1D9E75}
+.phase-setup .step-example{border-color:#1D9E75}
+.phase-setup .tech-tag{background:#E1F5EE;color:#0F6E56}
+
+.phase-monitor .phase-header{border-color:#378ADD}
+.phase-monitor .phase-number{background:#378ADD}
+.phase-monitor .step-dot{border-color:#378ADD}
+.phase-monitor .step-example{border-color:#378ADD}
+.phase-monitor .tech-tag{background:#E6F1FB;color:#185FA5}
+
+.phase-classify .phase-header{border-color:#7F77DD}
+.phase-classify .phase-number{background:#7F77DD}
+.phase-classify .step-dot{border-color:#7F77DD}
+.phase-classify .step-example{border-color:#7F77DD}
+.phase-classify .tech-tag{background:#EEEDFE;color:#534AB7}
+
+.phase-agent .phase-header{border-color:#D85A30}
+.phase-agent .phase-number{background:#D85A30}
+.phase-agent .step-dot{border-color:#D85A30}
+.phase-agent .step-example{border-color:#D85A30}
+.phase-agent .tech-tag{background:#FAECE7;color:#993C1D}
+
+.phase-voice .phase-header{border-color:#D4537E}
+.phase-voice .phase-number{background:#D4537E}
+.phase-voice .step-dot{border-color:#D4537E}
+.phase-voice .step-example{border-color:#D4537E}
+.phase-voice .tech-tag{background:#FBEAF0;color:#993556}
+
+.phase-end .phase-header{border-color:#639922}
+.phase-end .phase-number{background:#639922}
+.phase-end .step-dot{border-color:#639922}
+.phase-end .step-example{border-color:#639922}
+.phase-end .tech-tag{background:#EAF3DE;color:#3B6D11}
+
+.phase-learn .phase-header{border-color:#BA7517}
+.phase-learn .phase-number{background:#BA7517}
+.phase-learn .step-dot{border-color:#BA7517}
+.phase-learn .step-example{border-color:#BA7517}
+.phase-learn .tech-tag{background:#FAEEDA;color:#854F0B}
+
+.arrow-between{text-align:center;font-size:24px;color:#ccc;margin:8px 0;letter-spacing:4px}
+
+.decision-box{background:#FFF9ED;border:2px dashed #EAC066;border-radius:12px;padding:16px 20px;margin:12px 0 12px 34px}
+.decision-box .decision-title{font-weight:600;font-size:14px;color:#854F0B;margin-bottom:8px}
+.decision-paths{display:flex;gap:10px;flex-wrap:wrap}
+.path{flex:1;min-width:140px;padding:10px 14px;border-radius:10px;font-size:12.5px}
+.path-relevant{background:#E8F0EB;border:1px solid #97C459;color:#3B6D11}
+.path-drift{background:#FAECE7;border:1px solid #F0997B;color:#993C1D}
+.path-unsure{background:#FAEEDA;border:1px solid #FAC775;color:#854F0B}
+.path strong{display:block;font-size:13px;margin-bottom:4px}
+
+.diagnosis-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
+.diagnosis-card{background:#FFF9ED;border-radius:8px;padding:10px 12px;border:1px solid #EAC066}
+.diagnosis-card .label{font-weight:600;font-size:12px;color:#854F0B;margin-bottom:3px}
+.diagnosis-card .desc{font-size:11.5px;color:#666;line-height:1.5}
+
+.tool-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
+.tool-card{padding:10px 12px;border-radius:8px;font-size:12px;border:1px solid}
+.tool-card .tool-name{font-weight:600;font-size:12.5px;margin-bottom:3px}
+.tool-card .tool-desc{color:#666;line-height:1.5}
+.tool-speak{background:#FAECE7;border-color:#F0997B}
+.tool-speak .tool-name{color:#993C1D}
+.tool-ask{background:#FBEAF0;border-color:#ED93B1}
+.tool-ask .tool-name{color:#993556}
+.tool-break{background:#E1F5EE;border-color:#5DCAA5}
+.tool-break .tool-name{color:#0F6E56}
+.tool-chunk{background:#EEEDFE;border-color:#AFA9EC}
+.tool-chunk .tool-name{color:#534AB7}
+.tool-search{background:#FAEEDA;border-color:#FAC775}
+.tool-search .tool-name{color:#854F0B}
+.tool-dnd{background:#E6F1FB;border-color:#85B7EB}
+.tool-dnd .tool-name{color:#185FA5}
+
+.cooldown-table{width:100%;border-collapse:collapse;margin-top:10px;font-size:12.5px}
+.cooldown-table th{background:#F5F3EE;padding:6px 12px;text-align:left;font-weight:600;color:#555}
+.cooldown-table td{padding:6px 12px;border-top:1px solid #E8E6E0}
+
+.footer{text-align:center;margin-top:48px;padding-top:24px;border-top:1px solid #E8E6E0;font-size:12px;color:#aaa}
+</style>
+
+<div class="container">
+
+<h1>Anchor -- Complete Application Pipeline</h1>
+<subtitle class="subtitle">AI Body Double for Focus (ADHD + Anyone Who Drifts)</subtitle>
+<div class="tagline">"Every ADHD app asks you to set a timer. But the whole point of ADHD is you forget the timer exists."</div>
+
+<!-- ==================== PHASE 1: SESSION SETUP ==================== -->
+<div class="phase phase-setup">
+<div class="phase-header">
+    <div class="phase-number">1</div>
+    <div>
+        <div class="phase-title">Session setup</div>
+        <div class="phase-desc">User tells Anchor what they're working on. Runs once at the start.</div>
+    </div>
+</div>
+
+<div class="step">
+    <div class="step-dot"></div>
+    <div class="step-content">
+        <div class="step-title">User declares their task</div>
+        <div class="step-body">The user opens Anchor and describes what they want to work on. They don't set a timer (ADHD users have "time blindness" and can't estimate time). Instead they pick an <strong>energy level</strong>: Quick Sprint, Solid Session, Deep Dive, or Just Start.</div>
+        <div class="step-example">User types: "Filling out my volunteer application"<br>User selects: "Solid session"</div>
+        <div class="step-tech"><span class="tech-tag">React Frontend</span></div>
+    </div>
+</div>
+
+<div class="step">
+    <div class="step-dot"></div>
+    <div class="step-content">
+        <div class="step-title">Task context builder analyzes the task</div>
+        <div class="step-body">Anchor sends the task description to Gemini, which returns a semantic understanding: what domain the task involves, what tools the user will likely need, what sites they might visit, and what type of activity it is (reading, writing, coding, mixed). This context is what the classifier uses for the entire session to judge whether each window is related to the task.</div>
+        <div class="step-example">Input: "Filling out volunteer application"<br>Output: domain: "civic engagement, volunteering"<br>likely_tools: ["Web Browser", "PDF Reader", "Email"]<br>activity_type: "mixed"<br>always_ok: ["Spotify", "Calculator"]</div>
+        <div class="step-tech"><span class="tech-tag">Gemini 2.5 Flash</span><span class="tech-tag">Tavily (research)</span></div>
+    </div>
+</div>
+
+<div class="step">
+    <div class="step-dot"></div>
+    <div class="step-content">
+        <div class="step-title">Do Not Disturb + notification prompt</div>
+        <div class="step-body">Anchor asks: "Notifications are the #1 focus killer. Want to turn on Do Not Disturb?" If the user says no, Anchor asks: "What notifications are you expecting?" This is stored so the agent can be <strong>extra gentle</strong> when that specific app pops up later (it was a notification pull, not intentional drift).</div>
+        <div class="step-example">User: "Keep notifications on, I'm expecting Slack from Priya"<br>Stored: expected_notifications = "Slack from Priya"</div>
+        <div class="step-tech"><span class="tech-tag">React Frontend</span></div>
+    </div>
+</div>
+
+<div class="step">
+    <div class="step-dot"></div>
+    <div class="step-content">
+        <div class="step-title">Load returning user's profile (Pattern Agent)</div>
+        <div class="step-body">If this isn't the user's first session, Anchor loads their profile from Supermemory. This profile was built by the Pattern Agent after previous sessions and contains: typical focus duration per task type, common drift triggers, time-of-day patterns, what intervention styles work best for this user. First-time users skip this step.</div>
+        <div class="step-example">Profile: "Reading tasks: 22 min avg focus. Coding: 45 min. Twitter is #1 drift trigger. Responds well to break suggestions. Afternoon sessions have 30% shorter focus."</div>
+        <div class="step-tech"><span class="tech-tag">Supermemory</span><span class="tech-tag">Pattern Agent</span></div>
+    </div>
+</div>
+</div>
+
+<!-- ==================== PHASE 2: MONITORING ==================== -->
+<div class="phase phase-monitor">
+<div class="phase-header">
+    <div class="phase-number">2</div>
+    <div>
+        <div class="phase-title">Continuous monitoring</div>
+        <div class="phase-desc">Runs every 5 seconds in the background. User doesn't see or feel this.</div>
+    </div>
+</div>
+
+<div class="step">
+    <div class="step-dot"></div>
+    <div class="step-content">
+        <div class="step-title">Window watcher reads the screen</div>
+        <div class="step-body">Every 5 seconds, a Python script reads the <strong>title</strong> of the currently active window on the user's computer. Not a screenshot, not screen recording, not what they're typing -- just the window title. For example: "Google Chrome - Reddit" or "VS Code - server.py" or "Preview - research_paper.pdf". This is the ONLY data collected from the user's screen.</div>
+        <div class="step-example">macOS: osascript reads "Google Chrome - Kidney-Friendly Recipes | DaVita"<br>Windows: pygetwindow reads the same kind of title</div>
+        <div class="step-tech"><span class="tech-tag">Python osascript (macOS)</span><span class="tech-tag">pygetwindow (Windows)</span></div>
+    </div>
+</div>
+
+<div class="step">
+    <div class="step-dot"></div>
+    <div class="step-content">
+        <div class="step-title">Activity tracker monitors keyboard and mouse</div>
+        <div class="step-body">A background listener (pynput) records the <strong>timestamp</strong> of the last keyboard press, mouse movement, or scroll event. It does NOT record what keys were pressed or where the mouse clicked -- only WHEN activity happened. This is used to detect "silent drift" -- when the correct window is open but the user has zoned out, picked up their phone, or left their desk.</div>
+        <div class="step-example">last_activity_time = 14:32:47 (last mouse move)<br>Now = 14:37:12 → idle for 4.4 minutes → trigger silent drift check</div>
+        <div class="step-tech"><span class="tech-tag">pynput (keyboard + mouse listener)</span></div>
+    </div>
+</div>
+
+<div class="step">
+    <div class="step-dot"></div>
+    <div class="step-content">
+        <div class="step-title">Window change detection</div>
+        <div class="step-body">The system compares the current window title to the previous one. If they're different, the window changed and we move to the classifier (Phase 3). If they're the same, we check for timeouts instead: Has the user been idle too long? Have they been on Claude/ChatGPT for 15+ minutes? Have they been focused 40+ minutes without a break? Have they never opened a task-relevant app? Is the user stuck on a drift app for 1+ minute?</div>
+        <div class="step-example">Previous: "Chrome - Volunteer Application"<br>Current: "Chrome - Reddit"<br>→ Window changed! Go to classifier.</div>
+    </div>
+</div>
+
+<div class="step">
+    <div class="step-dot"></div>
+    <div class="step-content">
+        <div class="step-title">Notification pull detection</div>
+        <div class="step-body">When a window changes, the system measures <strong>how fast</strong> the switch happened relative to the user's last keyboard/mouse activity. If the switch was very fast (under 3 seconds since last activity), it was probably a notification popping up (WhatsApp call, Slack message, calendar alert) -- NOT the user deliberately navigating. This distinction matters because notification pulls get a gentler response: "Looks like Slack pulled you away" instead of "You drifted to Slack."</div>
+        <div class="step-example">User was typing at 14:32:46<br>WhatsApp appeared at 14:32:47 (1 second later)<br>→ NOTIFICATION PULL (user didn't choose to open WhatsApp)</div>
+    </div>
+</div>
+</div>
+
+<!-- ==================== PHASE 3: CLASSIFICATION ==================== -->
+<div class="phase phase-classify">
+<div class="phase-header">
+    <div class="phase-number">3</div>
+    <div>
+        <div class="phase-title">Intelligent classification</div>
+        <div class="phase-desc">The LLM decides if each window is related to the task. Content-aware, not app-name-aware.</div>
+    </div>
+</div>
+
+<div class="step">
+    <div class="step-dot"></div>
+    <div class="step-content">
+        <div class="step-title">Content-aware classification</div>
+        <div class="step-body">The classifier sends the task context + the window title to Gemini and asks: "Is this window relevant to the user's task?" The critical difference from other apps: it reads the <strong>CONTENT</strong> in the title, not just the app name. The same app gets different verdicts depending on what the user is doing in it. Messaging apps (WhatsApp, Telegram) always default to "unsure" -- the system asks instead of assuming.</div>
+        <div class="step-example">Task: "volunteer application"<br><br>"Claude - personal skills assessment" → RELEVANT (content matches)<br>"Claude - AI agent idea for yhack" → DRIFT (unrelated content)<br>"YouTube - MIT volunteering lecture" → RELEVANT<br>"YouTube - best headphones 2026" → DRIFT<br>"WhatsApp" → UNSURE (could be either)</div>
+        <div class="step-tech"><span class="tech-tag">Gemini 2.5 Flash</span><span class="tech-tag">LangChain wrapper</span></div>
+    </div>
+</div>
+
+<div class="step">
+    <div class="step-dot"></div>
+    <div class="step-content">
+        <div class="step-title">Result caching</div>
+        <div class="step-body">Every classification result is cached. If the user opens Reddit, the classifier calls Gemini (~1.5 seconds). If they go back to Reddit later, the cached result is returned instantly (0ms). This saves money (fewer API calls) and reduces latency. The cache resets at the start of each session because a different task means different relevance judgments.</div>
+        <div class="step-example">First time "Chrome - Reddit": 1,431ms (Gemini call)<br>Second time "Chrome - Reddit": 0ms (cache hit)</div>
+    </div>
+</div>
+
+<div class="decision-box">
+    <div class="decision-title">Classification result determines what happens next:</div>
+    <div class="decision-paths">
+        <div class="path path-relevant">
+            <strong>RELEVANT</strong>
+            Save to observation history silently. No agent call. No LLM cost. User is on task, don't interrupt.
+        </div>
+        <div class="path path-drift">
+            <strong>DRIFT</strong>
+            Save to history AND call the Anchor Agent. The agent reads the full session context and decides how to respond.
+        </div>
+        <div class="path path-unsure">
+            <strong>UNSURE</strong>
+            Save to history AND call the Anchor Agent. The agent typically asks the user: "Is this for your task or did you drift?"
+        </div>
+    </div>
+</div>
+</div>
+
+<!-- ==================== PHASE 4: ANCHOR AGENT ==================== -->
+<div class="phase phase-agent">
+<div class="phase-header">
+    <div class="phase-number">4</div>
+    <div>
+        <div class="phase-title">Anchor Agent (the brain)</div>
+        <div class="phase-desc">An ADHD specialist AI that reasons about the situation and chooses the right intervention.</div>
+    </div>
+</div>
+
+<div class="step">
+    <div class="step-dot"></div>
+    <div class="step-content">
+        <div class="step-title">Agent reads full session history</div>
+        <div class="step-body">The agent doesn't just see the current event. It reads the <strong>entire session history</strong>: every window change, every classification, every nudge it already sent, every user response. It also reads session state: how many drifts total, how long the session has been running, whether the user ever started the task, what notifications they're expecting. This is why the same drift event (opening Reddit) gets completely different responses depending on context.</div>
+        <div class="step-example">[0m] Session started: "volunteer application"<br>[0.5m] Window: Application Form → relevant<br>[5m] Window: Claude - skills help → relevant<br>[15m] Window: Reddit → drift (1st)<br>[15.5m] Window: Application Form → relevant (self-corrected)<br>[20m] Window: Reddit → drift (2nd) ← CURRENT EVENT<br><br>Agent sees: "She was focused 20 min, self-corrected once, now drifting again. Possible executive function depletion."</div>
+    </div>
+</div>
+
+<div class="step">
+    <div class="step-dot"></div>
+    <div class="step-content">
+        <div class="step-title">Agent diagnoses WHY the user is drifting</div>
+        <div class="step-body">Using its knowledge of ADHD neuroscience (Barkley's executive function fuel tank model, time blindness, task initiation paralysis), the agent diagnoses the root cause of the drift. Different causes get different interventions. This is what makes Anchor an ADHD specialist, not a generic reminder app.</div>
+        <div class="diagnosis-grid">
+            <div class="diagnosis-card">
+                <div class="label">DEPLETED</div>
+                <div class="desc">Was focused 20+ min then suddenly started drifting. Executive function fuel tank is empty. Need to refuel with a break.</div>
+            </div>
+            <div class="diagnosis-card">
+                <div class="label">STUCK</div>
+                <div class="desc">Was working, hit a specific hard part, started drifting. Need task chunking -- break the hard part into smaller pieces.</div>
+            </div>
+            <div class="diagnosis-card">
+                <div class="label">OVERWHELMED</div>
+                <div class="desc">Never started the task. Keeps bouncing between random apps. Task feels too big. Need the smallest possible first step.</div>
+            </div>
+            <div class="diagnosis-card">
+                <div class="label">BORED</div>
+                <div class="desc">Drifting to entertaining apps (Reddit, YouTube). The task is tedious. Need acknowledgment + mini-goal to create momentum.</div>
+            </div>
+            <div class="diagnosis-card">
+                <div class="label">AVOIDING</div>
+                <div class="desc">Keeps returning to task but drifts again within 1-2 min. Something about the task feels emotionally hard. Need to name it and offer to skip to an easier section.</div>
+            </div>
+            <div class="diagnosis-card">
+                <div class="label">NOTIFICATION PULL</div>
+                <div class="desc">App popped up on its own (call, message, alert). User didn't choose to drift. Need gentle acknowledgment, not a redirect.</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="step">
+    <div class="step-dot"></div>
+    <div class="step-content">
+        <div class="step-title">Agent selects tools autonomously</div>
+        <div class="step-body">The agent has <strong>6 tools</strong> it can choose from. It picks the right tool(s) based on its diagnosis. Sometimes it uses one tool, sometimes it chains multiple. The agent decides autonomously -- we don't hardcode which tool to use for which situation. This is what makes it a real AI agent, not a script.</div>
+        <div class="tool-grid">
+            <div class="tool-card tool-speak">
+                <div class="tool-name">speak_to_user</div>
+                <div class="tool-desc">Speak a nudge, observation, or encouragement out loud via ElevenLabs voice.</div>
+            </div>
+            <div class="tool-card tool-ask">
+                <div class="tool-name">ask_user</div>
+                <div class="tool-desc">Ask the user a question via voice. User speaks back through Agora audio channel.</div>
+            </div>
+            <div class="tool-card tool-break">
+                <div class="tool-name">suggest_break</div>
+                <div class="tool-desc">Suggest a 3-5 min break with a physical activity (stretch, walk, water. Never phone).</div>
+            </div>
+            <div class="tool-card tool-chunk">
+                <div class="tool-name">chunk_task</div>
+                <div class="tool-desc">Break the task into the smallest possible next step. "Just fill in the first field."</div>
+            </div>
+            <div class="tool-card tool-search">
+                <div class="tool-name">search_adhd_strategy</div>
+                <div class="tool-desc">Search Tavily for research-backed ADHD strategies for this specific situation.</div>
+            </div>
+            <div class="tool-card tool-dnd">
+                <div class="tool-name">suggest_dnd</div>
+                <div class="tool-desc">Suggest enabling Do Not Disturb when notifications keep pulling the user away.</div>
+            </div>
+        </div>
+        <div class="step-tech"><span class="tech-tag">LangChain Agent</span><span class="tech-tag">Gemini 2.5 Flash</span><span class="tech-tag">Tavily</span></div>
+    </div>
+</div>
+
+<div class="step">
+    <div class="step-dot"></div>
+    <div class="step-content">
+        <div class="step-title">Progressive cooldown (anti-nagging)</div>
+        <div class="step-body">ADHD research shows that nagging makes things worse -- it creates shame and rebellion, not compliance. So the cooldown between nudges gets longer each time. If repeated nudges aren't working, the agent switches strategy entirely (suggests a break instead of another redirect). Eventually it goes quiet and waits for the user to come back on their own.</div>
+        <table class="cooldown-table">
+            <tr><th>Recent nudges (last 5 min)</th><th>Cooldown</th><th>Strategy</th></tr>
+            <tr><td>0-1 nudges</td><td>30 seconds</td><td>Gentle redirect to task</td></tr>
+            <tr><td>2 nudges</td><td>60 seconds</td><td>Acknowledge the pattern, offer help</td></tr>
+            <tr><td>3 nudges</td><td>120 seconds</td><td>Switch to suggesting a break</td></tr>
+            <tr><td>4+ nudges</td><td>5 minutes</td><td>Go quiet. "I'm here when you're ready."</td></tr>
+        </table>
+    </div>
+</div>
+
+<div class="step">
+    <div class="step-dot"></div>
+    <div class="step-content">
+        <div class="step-title">Drift escalation</div>
+        <div class="step-body">The agent's response escalates based on total drifts in the session. But the response is NEVER the same -- it varies its wording, tone, and approach every time. The same situation gets different handling based on the full session story.</div>
+        <div class="step-example">1st drift: Agent stays silent. Gives 30 seconds to self-correct.<br>2nd drift: "You're on Reddit. Ready to open your application?"<br>3rd drift: "You keep bouncing away. Something on the form feeling hard?"<br>4th drift: "Your brain might need a reset. Stand up and stretch for 3 minutes."<br>5th drift: (quiet -- waits for user to come back)</div>
+    </div>
+</div>
+</div>
+
+<!-- ==================== PHASE 5: VOICE DELIVERY ==================== -->
+<div class="phase phase-voice">
+<div class="phase-header">
+    <div class="phase-number">5</div>
+    <div>
+        <div class="phase-title">Voice delivery + two-way conversation</div>
+        <div class="phase-desc">The user hears a warm voice and can talk back naturally. No need to look at a screen.</div>
+    </div>
+</div>
+
+<div class="step">
+    <div class="step-dot"></div>
+    <div class="step-content">
+        <div class="step-title">ElevenLabs generates the voice</div>
+        <div class="step-body">When the agent decides to speak, the message text is sent to ElevenLabs, which generates warm, natural-sounding speech audio. The voice (Roger -- laid-back, casual) sounds like a supportive friend, not a robotic assistant. The audio is generated in real-time and plays through the user's speakers or headphones.</div>
+        <div class="step-example">Agent message: "You've been on Reddit for a minute. Forms are tedious, I know. Just 5 more fields then you've earned a break."<br>→ ElevenLabs generates warm spoken audio<br>→ Plays through speakers<br>→ User hears it no matter what app they're in</div>
+        <div class="step-tech"><span class="tech-tag">ElevenLabs Text-to-Speech</span><span class="tech-tag">Roger voice (casual, warm)</span></div>
+    </div>
+</div>
+
+<div class="step">
+    <div class="step-dot"></div>
+    <div class="step-content">
+        <div class="step-title">Agora persistent audio channel</div>
+        <div class="step-body">When the session starts, Agora opens a persistent audio channel -- like being on a quiet phone call with your body double. The channel stays open the entire session, mostly silent. When the agent speaks, audio plays through this channel. When the user wants to respond, they just talk naturally. Agora captures their voice, speech-to-text transcribes it, and the agent processes the response.</div>
+        <div class="step-example">Agent says: "Something on the form feeling hard?"<br>User speaks: "Yeah I don't know what to write for the skills section"<br>Speech-to-text: "yeah I don't know what to write for the skills section"<br>Agent processes → uses chunk_task tool<br>Agent says: "Start with just one skill. What's one thing you're good at?"</div>
+        <div class="step-tech"><span class="tech-tag">Agora (audio channel)</span><span class="tech-tag">Deepgram / ElevenLabs STT</span></div>
+    </div>
+</div>
+
+<div class="step">
+    <div class="step-dot"></div>
+    <div class="step-content">
+        <div class="step-title">Fallback: UI nudge cards + buttons</div>
+        <div class="step-body">If Agora voice isn't set up or the user's microphone isn't available, the same messages appear as visual nudge cards on the React frontend with clickable buttons. The voice is always the primary delivery method (works even when the Anchor tab is hidden), and the UI cards are the backup.</div>
+        <div class="step-example">Nudge card appears: "You're on Reddit. Ready to get back?"<br>Buttons: [Pull me back] [Taking a break]<br>→ User clicks a button → response sent back via WebSocket</div>
+        <div class="step-tech"><span class="tech-tag">React Frontend</span><span class="tech-tag">WebSocket</span></div>
+    </div>
+</div>
+</div>
+
+<!-- ==================== PHASE 6: TIMEOUT TRIGGERS ==================== -->
+<div class="phase phase-monitor">
+<div class="phase-header">
+    <div class="phase-number">6</div>
+    <div>
+        <div class="phase-title">Background timeout triggers</div>
+        <div class="phase-desc">These fire from the monitoring loop even when the window doesn't change.</div>
+    </div>
+</div>
+
+<div class="step">
+    <div class="step-dot"></div>
+    <div class="step-content">
+        <div class="step-title">Silent drift detection</div>
+        <div class="step-body">The correct window is open but no keyboard or mouse activity for too long. The threshold adapts to the task type: <strong>1 minute</strong> for forms/writing/browsing (constant interaction expected), <strong>3 minutes</strong> for coding (sometimes you think before typing), <strong>7 minutes</strong> for reading (legitimately staring at screen). The agent asks gently: "Your screen has been quiet for a while. Still with me?"</div>
+    </div>
+</div>
+
+<div class="step">
+    <div class="step-dot"></div>
+    <div class="step-content">
+        <div class="step-title">Task initiation detection</div>
+        <div class="step-body">1+ minute has passed and the user has NEVER opened a task-relevant app. They declared "volunteer application" but they're bouncing between Terminal and random Chrome tabs. This is <strong>task initiation paralysis</strong> -- one of the top 3 ADHD executive function deficits. The agent helps them start: "Just open the form and fill in your name. Nothing else."</div>
+    </div>
+</div>
+
+<div class="step">
+    <div class="step-dot"></div>
+    <div class="step-content">
+        <div class="step-title">Sustained drift detection</div>
+        <div class="step-body">User opened a drift app (Reddit) and the agent stayed silent (first drift, giving them a chance to self-correct). But they're STILL on Reddit 1+ minute later. They didn't self-correct -- they got sucked in. The agent intervenes even though it was technically the first drift.</div>
+    </div>
+</div>
+
+<div class="step">
+    <div class="step-dot"></div>
+    <div class="step-content">
+        <div class="step-title">Hyperfocus detection</div>
+        <div class="step-body">User has been focused for 40+ minutes without any break. This is <strong>hyperfocus</strong> -- the opposite problem from drift. ADHD brains can lock onto a task for hours, skipping meals, missing meetings, depleting all executive function for the rest of the day. The agent proactively suggests a break before they crash.</div>
+    </div>
+</div>
+
+<div class="step">
+    <div class="step-dot"></div>
+    <div class="step-content">
+        <div class="step-title">Long stay on relevant apps</div>
+        <div class="step-body">User has been on Claude/ChatGPT/YouTube for 15+ minutes. These were classified as "relevant" but the user might have drifted WITHIN the app -- started on a work-related Claude conversation and ended up discussing something completely different. The agent checks in: "You've been on Claude for a while. Still working on the application?"</div>
+    </div>
+</div>
+</div>
+
+<!-- ==================== PHASE 7: SESSION END ==================== -->
+<div class="phase phase-end">
+<div class="phase-header">
+    <div class="phase-number">7</div>
+    <div>
+        <div class="phase-title">Session end + summary</div>
+        <div class="phase-desc">Real stats from the actual session, not estimates.</div>
+    </div>
+</div>
+
+<div class="step">
+    <div class="step-dot"></div>
+    <div class="step-content">
+        <div class="step-title">Session summary from real data</div>
+        <div class="step-body">When the session ends, Anchor compiles real statistics from the observation history. Nothing is estimated -- every number comes from actual events that were tracked during the session. The user sees a visual timeline (green = focused, red = drifted, gray = break) and key stats.</div>
+        <div class="step-example">Total time: 42 minutes<br>Focused time: 31 minutes (74%)<br>Drifts caught: 4<br>Longest focus streak: 18 minutes<br>Top drift trigger: Reddit (3 of 4 drifts)<br>Agent interventions: 3 (2 nudges, 1 break suggestion)<br><br>Timeline: ████████░░██████████████░░░███████████░░████<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;focused &nbsp;drift &nbsp;focused &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;break &nbsp;focused &nbsp;drift &nbsp;focused</div>
+        <div class="step-tech"><span class="tech-tag">React Frontend</span><span class="tech-tag">FastAPI Backend</span></div>
+    </div>
+</div>
+</div>
+
+<!-- ==================== PHASE 8: CROSS-SESSION LEARNING ==================== -->
+<div class="phase phase-learn">
+<div class="phase-header">
+    <div class="phase-number">8</div>
+    <div>
+        <div class="phase-title">Cross-session learning (Pattern Agent)</div>
+        <div class="phase-desc">Runs ONCE after each session. Makes the next session smarter.</div>
+    </div>
+</div>
+
+<div class="step">
+    <div class="step-dot"></div>
+    <div class="step-content">
+        <div class="step-title">Pattern Agent analyzes all past sessions</div>
+        <div class="step-body">After each session, the Pattern Agent reads ALL past session logs from Supermemory and discovers patterns the user can't see themselves. It uses Tavily to research ADHD strategies specific to the user's patterns. The updated profile is saved and loaded at the start of the next session.</div>
+        <div class="step-example">After 5 sessions, Pattern Agent discovers:<br><br>By task type: "Reading = 22 min focus, Coding = 45 min, Forms = 15 min"<br>By time: "Afternoon sessions have 30% shorter focus"<br>By trigger: "Twitter is #1 escape. Reddit appears only on form tasks."<br>By behavior: "Self-corrects 60% of the time. Responds to break suggestions."<br>By initiation: "Writing tasks have paralysis. Coding doesn't."<br><br>Next session prediction: "She's doing a form task at 3pm. Suggest a break at 12 minutes, before the drift at 15 minutes."</div>
+        <div class="step-tech"><span class="tech-tag">Gemini 2.5 Flash</span><span class="tech-tag">Supermemory</span><span class="tech-tag">Tavily</span></div>
+    </div>
+</div>
+
+<div class="step">
+    <div class="step-dot"></div>
+    <div class="step-content">
+        <div class="step-title">Next session starts smarter</div>
+        <div class="step-body">By session 5, Anchor knows your brain better than you do. It predicts when you'll drift BEFORE it happens and suggests a break preemptively. It knows which apps are your escape routes. It knows what time of day you focus best. It knows whether you respond better to gentle nudges or direct challenges. Every session makes the next one more personalized.</div>
+        <div class="step-example">Session 1: Generic responses, 30-min focus assumed<br>Session 3: Knows Reddit is the trigger, suggests breaks at 20 min<br>Session 5: Predicts drift at 15 min for form tasks, suggests break at 12 min<br>Session 10: Fully personalized ADHD coach that knows your patterns</div>
+    </div>
+</div>
+</div>
+
+<!-- ==================== TECH STACK ==================== -->
+<div style="margin-top:48px;padding:24px;background:white;border-radius:16px;border:1px solid #E8E6E0">
+<h2 style="font-size:18px;font-weight:600;color:#1B3A5C;margin-bottom:16px;text-align:center">Technology stack</h2>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:13px">
+<div style="padding:10px 14px;background:#EEEDFE;border-radius:8px"><strong style="color:#534AB7">Gemini 2.5 Flash</strong> -- LLM brain for classifier + agent</div>
+<div style="padding:10px 14px;background:#FAECE7;border-radius:8px"><strong style="color:#993C1D">LangChain</strong> -- Agent orchestration with tool calling</div>
+<div style="padding:10px 14px;background:#FBEAF0;border-radius:8px"><strong style="color:#993556">ElevenLabs</strong> -- Voice generation (the product IS the voice)</div>
+<div style="padding:10px 14px;background:#E6F1FB;border-radius:8px"><strong style="color:#185FA5">Agora</strong> -- Two-way audio channel for voice conversation</div>
+<div style="padding:10px 14px;background:#FAEEDA;border-radius:8px"><strong style="color:#854F0B">Tavily</strong> -- ADHD strategy research + task context</div>
+<div style="padding:10px 14px;background:#E1F5EE;border-radius:8px"><strong style="color:#0F6E56">Supermemory</strong> -- Cross-session persistent memory</div>
+<div style="padding:10px 14px;background:#F1EFE8;border-radius:8px"><strong style="color:#444441">FastAPI + WebSocket</strong> -- Backend server + real-time events</div>
+<div style="padding:10px 14px;background:#F1EFE8;border-radius:8px"><strong style="color:#444441">React + Tailwind</strong> -- Frontend (built in Lovable)</div>
+</div>
+</div>
+
+<!-- ==================== PRIVACY ==================== -->
+<div style="margin-top:24px;padding:24px;background:white;border-radius:16px;border:1px solid #E8E6E0">
+<h2 style="font-size:18px;font-weight:600;color:#1B3A5C;margin-bottom:12px;text-align:center">Privacy architecture</h2>
+<div style="font-size:13.5px;color:#555;line-height:1.7;text-align:center;max-width:600px;margin:0 auto">
+    Reads window <strong>titles</strong> only -- no screenshots, no screen recording, no OCR.<br>
+    Keyboard/mouse tracking records <strong>timestamps</strong> only -- never what was typed.<br>
+    Data sent to LLM: task description + window title. Nothing else.<br>
+    <strong>One-line answer for judges: "We track what app you're in, not what you're doing in it."</strong>
+</div>
+</div>
+
+<div class="footer">
+    Anchor -- YHack Spring 2026 | Personal AI Agents Track (Harper) + Societal Impact<br>
+    "Every ADHD app asks you to set a timer. We built two AI agents that manage time FOR you."
+</div>
+
+</div>

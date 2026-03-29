@@ -1,0 +1,534 @@
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,'Segoe UI',sans-serif;background:#FAFAF7;color:#2C2C2A;padding:32px 24px;line-height:1.7}
+.container{max-width:860px;margin:0 auto}
+h1{text-align:center;font-size:26px;font-weight:600;color:#1B3A5C;margin-bottom:4px}
+.sub{text-align:center;font-size:14px;color:#999;margin-bottom:40px}
+
+.section{margin-bottom:48px}
+.section-header{font-size:20px;font-weight:600;padding:12px 20px;border-radius:12px;margin-bottom:20px;display:flex;align-items:center;gap:10px}
+.done-header{background:#E8F0EB;color:#2B5A3F}
+.left-header{background:#FAECE7;color:#8B3A1D}
+
+.item{background:white;border:1px solid #E8E6E0;border-radius:14px;padding:20px 24px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.03)}
+.item-title{font-size:16px;font-weight:600;margin-bottom:6px;display:flex;align-items:center;gap:8px}
+.item-title .badge{font-size:11px;padding:2px 10px;border-radius:10px;font-weight:500}
+.badge-done{background:#D4EDDA;color:#155724}
+.badge-working{background:#FFF3CD;color:#856404}
+.badge-todo{background:#F8D7DA;color:#721C24}
+.badge-person{background:#E6F1FB;color:#185FA5}
+
+.what{font-size:14px;color:#444;margin-bottom:10px}
+.how{background:#F8F7F3;border-radius:10px;padding:14px 18px;margin-bottom:10px;border-left:3px solid #B4B2A9}
+.how-label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:#888;margin-bottom:6px}
+.how-body{font-size:13px;color:#555;line-height:1.7}
+.how-body code{background:#EDE;padding:1px 6px;border-radius:4px;font-size:12px;font-family:'SF Mono',monospace;color:#D85A30}
+
+.code-block{background:#2C2C2A;color:#E8E6E0;border-radius:10px;padding:14px 18px;margin:10px 0;font-family:'SF Mono',monospace;font-size:12px;line-height:1.6;overflow-x:auto;white-space:pre}
+
+.test-result{background:#E8F0EB;border-radius:8px;padding:10px 14px;margin-top:8px;font-size:12.5px;color:#2B5A3F;border-left:3px solid #5B8A72}
+
+.steps{margin-top:10px}
+.step-item{display:flex;gap:10px;margin-bottom:8px;font-size:13px;color:#555}
+.step-num{width:22px;height:22px;border-radius:50%;background:#E6F1FB;color:#185FA5;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;flex-shrink:0;margin-top:1px}
+
+.time-est{display:inline-block;background:#FAEEDA;color:#854F0B;font-size:11px;padding:2px 10px;border-radius:10px;font-weight:500;margin-top:8px}
+
+.file-ref{font-size:12px;color:#888;margin-top:8px;font-style:italic}
+
+.summary-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:40px}
+.summary-card{padding:20px;border-radius:12px;text-align:center}
+.summary-card .num{font-size:36px;font-weight:700}
+.summary-card .label{font-size:13px;margin-top:4px}
+.card-done{background:#E8F0EB;color:#2B5A3F}
+.card-left{background:#FAECE7;color:#8B3A1D}
+.card-hours{background:#FAEEDA;color:#854F0B}
+.card-files{background:#E6F1FB;color:#185FA5}
+
+.footer{text-align:center;margin-top:48px;padding-top:20px;border-top:1px solid #E8E6E0;font-size:12px;color:#aaa}
+</style>
+
+<div class="container">
+
+<h1>Anchor -- Build Status & Implementation Guide</h1>
+<div class="sub">YHack Spring 2026 | Last updated: March 27, 2026 (night before hackathon)</div>
+
+<!-- SUMMARY CARDS -->
+<div class="summary-grid">
+    <div class="summary-card card-done"><div class="num">20</div><div class="label">Features built & tested</div></div>
+    <div class="summary-card card-left"><div class="num">5</div><div class="label">Tasks left for Saturday</div></div>
+    <div class="summary-card card-hours"><div class="num">~14</div><div class="label">Hours of work remaining</div></div>
+    <div class="summary-card card-files"><div class="num">1</div><div class="label">Backend file (server.py)</div></div>
+</div>
+
+<!-- ========================================== -->
+<!-- WHAT'S DONE -->
+<!-- ========================================== -->
+<div class="section">
+<div class="section-header done-header">WHAT'S DONE (tested and working pre-hackathon)</div>
+
+<!-- 1. Window Watcher -->
+<div class="item">
+    <div class="item-title"><span class="badge badge-done">DONE</span> 1. Window watcher</div>
+    <div class="what">Reads the active window title on the user's computer every 5 seconds. Just the title, not screen content.</div>
+    <div class="how">
+        <div class="how-label">How it works</div>
+        <div class="how-body">Uses macOS <code>osascript</code> to ask System Events for the frontmost application name and its window title. Returns a string like <code>"Google Chrome - Reddit"</code>. Has a fallback that returns just the app name if the window title isn't accessible. Runs inside the <code>monitoring_loop()</code> as <code>get_active_window_title()</code>.</div>
+    </div>
+    <div class="code-block">result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=5)
+return result.stdout.strip()  # "Google Chrome - Reddit"</div>
+    <div class="test-result">TESTED: Correctly reads window titles from Chrome, Terminal, VS Code, WhatsApp, Preview. Accessibility permissions sorted (System Settings > Privacy > Accessibility > Terminal).</div>
+    <div class="file-ref">File: server.py, function: get_active_window_title()</div>
+</div>
+
+<!-- 2. Task Context Builder -->
+<div class="item">
+    <div class="item-title"><span class="badge badge-done">DONE</span> 2. Task context builder</div>
+    <div class="what">Analyzes the user's task at session start and returns what domain it involves, what tools/sites are likely needed, and what type of activity it is.</div>
+    <div class="how">
+        <div class="how-label">How it works</div>
+        <div class="how-body">Sends the task description to <code>Gemini 2.5 Flash</code> with a prompt asking it to return a JSON object with: task (cleaned up), domain, likely_tools, likely_sites, activity_type (reading/writing/coding/browsing/mixed), and always_ok apps. The prompt explicitly says to NEVER include messaging apps in always_ok. This context is stored in <code>session_state["task_context"]</code> and used by the classifier for every window classification during the session.</div>
+    </div>
+    <div class="code-block">Input: "filling out volunteer application"
+Output: {
+  "task": "Filling out volunteer application",
+  "domain": "civic engagement, volunteering",
+  "likely_tools": ["Web Browser", "PDF Reader", "Email"],
+  "activity_type": "mixed",
+  "always_ok": ["Spotify", "Calculator"]
+}</div>
+    <div class="file-ref">File: server.py, function: create_task_context()</div>
+</div>
+
+<!-- 3. Content-Aware Classifier -->
+<div class="item">
+    <div class="item-title"><span class="badge badge-done">DONE</span> 3. Content-aware LLM classifier</div>
+    <div class="what">Classifies each window as relevant, drift, or unsure based on the CONTENT in the title, not just the app name.</div>
+    <div class="how">
+        <div class="how-label">How it works</div>
+        <div class="how-body">Takes <code>task_context</code> + <code>window_title</code> and sends to Gemini with strict rules:
+        (1) Read the content in the title, not just app name -- "Claude - skills assessment" = relevant, "Claude - yhack idea" = drift for same app.
+        (2) Messaging apps (WhatsApp, Telegram) = "unsure" by default.
+        (3) Social media = "drift" unless title content clearly matches task.
+        (4) Terminal = "relevant" only if task involves coding.
+        (5) AI tools = read the conversation title.
+        Returns JSON with verdict, confidence (0-1), and reason.</div>
+    </div>
+    <div class="test-result">TESTED: 15/15 correct classifications including tricky cases. "Claude - personal skills" = relevant, "Claude - yhack idea" = drift. WhatsApp = unsure. Reddit = drift. Volunteer application form = relevant.</div>
+    <div class="file-ref">File: server.py, function: classify_window()</div>
+</div>
+
+<!-- 4. Classifier Caching -->
+<div class="item">
+    <div class="item-title"><span class="badge badge-done">DONE</span> 4. Classifier caching</div>
+    <div class="what">Same window title never gets re-classified. Saves money and latency.</div>
+    <div class="how">
+        <div class="how-label">How it works</div>
+        <div class="how-body">A Python dictionary <code>classification_cache</code> stores results keyed by window title. Before calling Gemini, checks the cache first. If found, returns instantly with <code>from_cache: True</code>. Cache resets at the start of each session (different task = different relevance).</div>
+    </div>
+    <div class="code-block">First "Chrome - Reddit":  1,431ms (Gemini call)
+Second "Chrome - Reddit": 0ms    (cache hit)</div>
+    <div class="file-ref">File: server.py, inside classify_window()</div>
+</div>
+
+<!-- 5. Anchor Agent -->
+<div class="item">
+    <div class="item-title"><span class="badge badge-done">DONE</span> 5. Anchor Agent (ADHD specialist)</div>
+    <div class="what">Reads full session history + session state and reasons about what to do. Has deep ADHD neuroscience knowledge. Only called on drift/unsure/timeout events.</div>
+    <div class="how">
+        <div class="how-label">How it works</div>
+        <div class="how-body">The agent prompt gives Gemini an ADHD specialist persona that understands Barkley's executive function model, time blindness, and task initiation paralysis. It receives:
+        <strong>Session state</strong> (drift count, elapsed time, ever_on_task, expected notifications, recent nudge count).
+        <strong>Full observation history</strong> (every window change, every nudge sent, every user response -- last 25 events).
+        <strong>Latest event</strong> (what just happened).
+        The agent diagnoses WHY the user is drifting (depleted, stuck, overwhelmed, bored, avoiding, notification pull) and picks a task-specific response. Returns JSON with action (speak/ask/suggest_break/stay_silent), message, and reasoning.</div>
+    </div>
+    <div class="test-result">TESTED LIVE: Agent correctly stayed silent on 1st drift, spoke on 2nd, escalated on 3rd. Fixed 3 bugs: (1) agent never speaking, (2) WhatsApp as relevant, (3) Claude with wrong title as relevant. Also fixed agent hallucinating app names -- now uses ACTUAL app from event.</div>
+    <div class="file-ref">File: server.py, function: anchor_agent_decide()</div>
+</div>
+
+<!-- 6. ElevenLabs Voice -->
+<div class="item">
+    <div class="item-title"><span class="badge badge-done">DONE</span> 6. ElevenLabs voice</div>
+    <div class="what">Agent speaks nudges out loud through the user's speakers. Voice works even when the Anchor tab is hidden.</div>
+    <div class="how">
+        <div class="how-label">How it works</div>
+        <div class="how-body">When the agent decides to speak, the message text is sent to <code>ElevenLabs API</code> which generates audio using the Roger voice (laid-back, casual). The <code>play()</code> function runs in a separate thread via <code>asyncio.to_thread()</code> so the monitoring loop doesn't stall while audio plays. Requires <code>mpv</code> installed for audio playback.</div>
+    </div>
+    <div class="code-block">audio = elevenlabs_client.text_to_speech.convert(
+    text=message,
+    voice_id="CwhRBWXzGAHq8TQ4Fs17",  # Roger
+    model_id="eleven_multilingual_v2",
+    output_format="mp3_44100_128",
+)
+await asyncio.to_thread(play, audio)</div>
+    <div class="test-result">TESTED: Voice plays through speakers. Heard 5 different nudge messages. test_voice.py confirms all messages play correctly. 10,000 free credits available.</div>
+    <div class="file-ref">File: server.py, function: speak(). Also test_voice.py for standalone test.</div>
+</div>
+
+<!-- 7. Progressive Cooldown -->
+<div class="item">
+    <div class="item-title"><span class="badge badge-done">DONE</span> 7. Progressive cooldown (anti-nagging)</div>
+    <div class="what">Cooldown between nudges gets longer each time. Prevents nagging which ADHD research shows makes things worse.</div>
+    <div class="how">
+        <div class="how-label">How it works</div>
+        <div class="how-body">Counts how many nudges were sent in the last 5 minutes. Based on the count, sets a cooldown period:
+        0-1 nudges = 30 sec, 2 nudges = 60 sec, 3 nudges = 120 sec, 4+ nudges = 300 sec (5 min).
+        This check runs BEFORE calling the LLM, so during cooldown periods there's zero API cost. The nudge count is also passed to the agent prompt so it knows to switch strategy (suggest break instead of another redirect) when nudges aren't working.</div>
+    </div>
+    <div class="file-ref">File: server.py, inside anchor_agent_decide()</div>
+</div>
+
+<!-- 8. Drift Escalation -->
+<div class="item">
+    <div class="item-title"><span class="badge badge-done">DONE</span> 8. Drift escalation</div>
+    <div class="what">Agent escalates responses: 1st drift = silent, 2nd = nudge, 3rd+ = must intervene.</div>
+    <div class="how">
+        <div class="how-label">How it works</div>
+        <div class="how-body">The <code>drift_count</code> in session_state increments every time the classifier returns "drift". This count is passed to the agent prompt. The prompt rules say: 1st drift = stay silent, 2nd = speak, 3rd+ = must intervene even if user self-corrected. The agent ALSO varies its phrasing every time -- it checks previous messages in the history and uses different words, tone, and approach.</div>
+    </div>
+    <div class="test-result">TESTED: Confirmed agent stays silent on 1st drift, speaks on 2nd. Previously had a bug where agent treated every drift as "first" -- fixed with explicit escalation rules.</div>
+    <div class="file-ref">File: server.py, prompt rules inside anchor_agent_decide()</div>
+</div>
+
+<!-- 9. Sustained Drift -->
+<div class="item">
+    <div class="item-title"><span class="badge badge-done">DONE</span> 9. Sustained drift detection</div>
+    <div class="what">If user opens a drift app and STAYS there for 1+ minute, agent speaks even if it was the first drift.</div>
+    <div class="how">
+        <div class="how-label">How it works</div>
+        <div class="how-body">In the <code>else</code> branch of the monitoring loop (same window, no change), checks if the current window was classified as "drift" in the cache. If yes, starts a timer (<code>sustained_drift_start</code>). If the user stays on that drift app for 1+ minute, fires an event to the agent. The <code>sustained_drift_nudged</code> flag prevents re-triggering. Both flags reset when the window changes.</div>
+    </div>
+    <div class="file-ref">File: server.py, monitoring_loop() else branch</div>
+</div>
+
+<!-- 10. Task Initiation -->
+<div class="item">
+    <div class="item-title"><span class="badge badge-done">DONE</span> 10. Task initiation detection</div>
+    <div class="what">If 1+ minute passes and user never opened a task-relevant app, agent helps them start.</div>
+    <div class="how">
+        <div class="how-label">How it works</div>
+        <div class="how-body">Checks <code>ever_on_task</code> (only becomes True when classifier sees a relevant window) AND <code>task_initiation_nudged</code> (prevents re-trigger) AND <code>elapsed >= 1</code> minute. If all three conditions met, fires "task initiation paralysis" event to agent. The agent suggests the smallest possible first step specific to the task: "Just open the form and fill in your name."</div>
+    </div>
+    <div class="test-result">TESTED: At 1.0 min with user on Terminal, agent correctly said: "Looks like you haven't opened your volunteer application yet. Would you like to open it now?"</div>
+    <div class="file-ref">File: server.py, monitoring_loop() else branch</div>
+</div>
+
+<!-- 11. Silent Drift -->
+<div class="item">
+    <div class="item-title"><span class="badge badge-done">DONE</span> 11. Silent drift detection (pynput)</div>
+    <div class="what">Correct window is open but no keyboard/mouse activity. User picked up phone or zoned out.</div>
+    <div class="how">
+        <div class="how-label">How it works</div>
+        <div class="how-body"><code>pynput</code> listeners run in background threads, tracking keyboard presses, mouse moves, clicks, and scrolls. Each event updates <code>last_activity_time</code>. The monitoring loop checks how long since last activity. Threshold adapts to task type: writing/browsing/mixed = 1 min, coding = 3 min, reading = 7 min. Fires event to agent. <code>idle_nudged</code> flag prevents re-trigger, resets on window change.</div>
+    </div>
+    <div class="code-block">idle_thresholds = {
+    "writing": 1,   # constant typing expected
+    "coding": 3,    # sometimes you think first
+    "browsing": 1,  # should be clicking/scrolling
+    "reading": 7,   # legitimately staring at screen
+    "mixed": 1,     # default
+}</div>
+    <div class="file-ref">File: server.py, pynput listeners at top + monitoring_loop() else branch</div>
+</div>
+
+<!-- 12. Notification Pull -->
+<div class="item">
+    <div class="item-title"><span class="badge badge-done">DONE</span> 12. Notification pull detection</div>
+    <div class="what">Detects if a window switch was a notification popping up (WhatsApp call) vs user deliberately navigating.</div>
+    <div class="how">
+        <div class="how-label">How it works</div>
+        <div class="how-body">Tracks <code>last_window_change_time</code> and compares with <code>last_activity_time</code>. If window changed within 3 seconds of last keyboard/mouse activity on the previous window, it was probably a notification pull. This info is included in the event summary sent to the agent: "NOTIFICATION PULL" or "User deliberately navigated here." The agent prompt says to be extra gentle with notification pulls.</div>
+    </div>
+    <div class="file-ref">File: server.py, monitoring_loop() if title != last_title branch</div>
+</div>
+
+<!-- 13. Hyperfocus -->
+<div class="item">
+    <div class="item-title"><span class="badge badge-done">DONE</span> 13. Hyperfocus detection</div>
+    <div class="what">40+ minutes focused without break. The opposite problem from drift -- ADHD hyperfocus burns all executive function.</div>
+    <div class="how">
+        <div class="how-label">How it works</div>
+        <div class="how-body">Tracks <code>last_break_time</code> in session state (initialized to session start time). Calculates minutes since last break. If >= 40 AND <code>ever_on_task</code> is True, fires event to agent. Updates <code>last_break_time</code> to prevent re-trigger.</div>
+    </div>
+    <div class="file-ref">File: server.py, monitoring_loop() else branch</div>
+</div>
+
+<!-- 14. Long Stay -->
+<div class="item">
+    <div class="item-title"><span class="badge badge-done">DONE</span> 14. Long stay detection on relevant apps</div>
+    <div class="what">On Claude/ChatGPT/YouTube for 15+ minutes. Classified as relevant but might have drifted WITHIN the app.</div>
+    <div class="how">
+        <div class="how-label">How it works</div>
+        <div class="how-body">Tracks <code>relevant_window_start</code> and <code>last_relevant_window</code>. If the current relevant window contains "claude", "chatgpt", "youtube", or "openai" and <code>time_on_window >= 15</code> minutes, fires event to agent. Resets the timer after firing so it doesn't re-trigger every 5 seconds.</div>
+    </div>
+    <div class="file-ref">File: server.py, monitoring_loop() else branch</div>
+</div>
+
+<!-- 15. Break Management -->
+<div class="item">
+    <div class="item-title"><span class="badge badge-done">DONE</span> 15. Break management</div>
+    <div class="what">User can take a 5-minute break. Monitoring pauses. Agent reminds when break is over.</div>
+    <div class="how">
+        <div class="how-label">How it works</div>
+        <div class="how-body">When user clicks "Taking a break" (or says it via voice), <code>break_active = True</code> and <code>break_start</code> is set. The monitoring loop skips all checks during break. Every 5 seconds it checks if <code>break_duration >= 300</code> seconds. When break ends, speaks "Break's over. Ready to get back?" and resets break state.</div>
+    </div>
+    <div class="file-ref">File: server.py, monitoring_loop() break check + WebSocket handler</div>
+</div>
+
+<!-- 16. Task-Specific Responses -->
+<div class="item">
+    <div class="item-title"><span class="badge badge-done">DONE</span> 16. Task-specific agent responses</div>
+    <div class="what">Agent gives responses specific to the user's actual task, never generic "get back to work."</div>
+    <div class="how">
+        <div class="how-label">How it works</div>
+        <div class="how-body">The agent prompt includes the user's exact task and has examples of task-specific chunking: forms = "fill the first field", reading = "read the abstract", coding = "write the function signature". The agent diagnoses the drift reason (depleted/stuck/overwhelmed/bored/avoiding) and picks a response specific to both the reason AND the task. Also acknowledges task-specific tedium: "Forms are repetitive" vs "Dense papers are hard to stay with."</div>
+    </div>
+    <div class="file-ref">File: server.py, TASK-SPECIFIC RESPONSES section in agent prompt</div>
+</div>
+
+<!-- 17. Anti-Hallucination -->
+<div class="item">
+    <div class="item-title"><span class="badge badge-done">DONE</span> 17. Anti-hallucination rules</div>
+    <div class="what">Agent must use actual app names from events, never makes up apps the user hasn't visited.</div>
+    <div class="how">
+        <div class="how-label">How it works</div>
+        <div class="how-body">Prompt rules state: "ONLY reference apps that appear in the session history. Use the ACTUAL app name from the LATEST EVENT." Also: "If ever_on_task is False, do NOT say 'you left your task' because they never opened it." Previously the agent would say "you left your application for Reddit" when the user had never opened the application and wasn't on Reddit. Fixed by making these rules explicit.</div>
+    </div>
+    <div class="test-result">TESTED: After fix, agent correctly said "You're on Google Chrome. Ready to open your volunteer application?" instead of hallucinating app names.</div>
+    <div class="file-ref">File: server.py, ACCURACY RULES section in agent prompt</div>
+</div>
+
+<!-- 18. Session Summary -->
+<div class="item">
+    <div class="item-title"><span class="badge badge-done">DONE</span> 18. Session summary builder</div>
+    <div class="what">Calculates real stats from session data when session ends.</div>
+    <div class="how">
+        <div class="how-label">How it works</div>
+        <div class="how-body">Iterates through <code>observation_history</code> to calculate: total time, focused time, drift count, nudge count, longest focus streak (tracks streak start/end from relevant/drift transitions), top drift trigger app (counts drift app occurrences with Counter), and builds a segmented timeline (focused/drift/break segments with start/end times). Returns a dict that gets sent to the frontend.</div>
+    </div>
+    <div class="file-ref">File: server.py, function: build_session_summary()</div>
+</div>
+
+<!-- 19. FastAPI Server -->
+<div class="item">
+    <div class="item-title"><span class="badge badge-done">DONE</span> 19. FastAPI server + WebSocket</div>
+    <div class="what">REST endpoints for session start/end/status. WebSocket for real-time frontend updates.</div>
+    <div class="how">
+        <div class="how-label">How it works</div>
+        <div class="how-body"><code>POST /session/start</code> builds task context, initializes session state, starts monitoring loop as asyncio background task. <code>POST /session/end</code> stops monitoring, builds summary. <code>GET /session/status</code> returns current state. <code>WS /ws</code> accepts WebSocket connections from React frontend. The <code>broadcast()</code> function sends events to all connected clients. WebSocket also listens for button clicks (pull_me_back, taking_break, im_ready).</div>
+    </div>
+    <div class="test-result">TESTED: All endpoints working via curl. Session starts, monitoring runs, classifications print, agent decides, voice speaks, session ends with summary.</div>
+    <div class="file-ref">File: server.py, REST endpoints + websocket_endpoint()</div>
+</div>
+
+<!-- 20. React Frontend -->
+<div class="item">
+    <div class="item-title"><span class="badge badge-working">90%</span> 20. React frontend (Lovable)</div>
+    <div class="what">All UI screens built: session start, energy selector, DND prompt, focus mode, nudge cards, session complete.</div>
+    <div class="how">
+        <div class="how-label">How it works</div>
+        <div class="how-body">Built in Lovable (AI web app builder). React + TypeScript + Tailwind CSS. Screens include: task input with energy-level selector (Quick Sprint / Solid Session / Deep Dive / Just Start), DND prompt, floating focus widget with green/red status dot, nudge cards with buttons, session complete with stats display. Design is calm/meditation app vibe with sage green + warm off-white colors. Currently shows hardcoded dummy data -- NOT connected to backend.</div>
+    </div>
+    <div class="file-ref">File: frontend/ directory (cloned from GitHub into testing-web/frontend/)</div>
+</div>
+
+</div>
+
+<!-- ========================================== -->
+<!-- WHAT'S LEFT -->
+<!-- ========================================== -->
+<div class="section">
+<div class="section-header left-header">WHAT'S LEFT FOR SATURDAY</div>
+
+<!-- LEFT 1: Frontend Connection -->
+<div class="item">
+    <div class="item-title">
+        <span class="badge badge-todo">TO DO</span>
+        <span class="badge badge-person">Person D (Antara)</span>
+        1. Connect frontend to backend
+    </div>
+    <div class="what">Wire the React UI to the FastAPI backend so real data flows between them.</div>
+    <div class="time-est">~2-3 hours</div>
+    <div class="how">
+        <div class="how-label">How to do it -- 4 touch points</div>
+        <div class="how-body">
+            <strong>Touch point 1: Start session.</strong> When user clicks "Let's begin" on the React UI, call <code>POST /session/start</code> with the task, duration, DND setting, and expected notifications.
+            <br><br>
+            <strong>Touch point 2: Listen for events.</strong> After session starts, open a WebSocket to <code>ws://localhost:8000/ws</code>. Listen for incoming events and update the UI:
+            <code>type: "classification"</code> = update the status dot (green/red).
+            <code>type: "nudge"</code> = show the nudge card with the message.
+            <code>type: "status"</code> = update focused/drifted state.
+            <code>type: "session_ended"</code> = show session summary screen with real stats.
+            <code>type: "break_started"</code> = show break timer.
+            <br><br>
+            <strong>Touch point 3: Send button clicks.</strong> When user clicks a button on a nudge card, send via WebSocket:
+            <code>ws.send(JSON.stringify({action: "pull_me_back"}))</code>
+            <br><br>
+            <strong>Touch point 4: End session.</strong> When user clicks "End Session", call <code>POST /session/end</code>.
+        </div>
+    </div>
+    <div class="code-block">// Touch point 1: Start session
+const res = await fetch("http://localhost:8000/session/start", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({task, duration, dnd, expected_notifications})
+});
+
+// Touch point 2: Listen for events
+const ws = new WebSocket("ws://localhost:8000/ws");
+ws.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    if (data.type === "nudge") showNudgeCard(data.message);
+    if (data.type === "status") updateStatusDot(data.value);
+    if (data.type === "session_ended") showSummary(data.summary);
+};
+
+// Touch point 3: Send button clicks
+ws.send(JSON.stringify({action: "pull_me_back"}));
+
+// Touch point 4: End session
+await fetch("http://localhost:8000/session/end", {method: "POST"});</div>
+</div>
+
+<!-- LEFT 2: LangChain Agent -->
+<div class="item">
+    <div class="item-title">
+        <span class="badge badge-todo">TO DO</span>
+        <span class="badge badge-person">Person B</span>
+        2. Swap agent to LangChain with tools
+    </div>
+    <div class="what">Replace the direct Gemini call with a LangChain tool-calling agent that has 6 tools and reasons autonomously.</div>
+    <div class="time-est">~3-4 hours</div>
+    <div class="how">
+        <div class="how-label">How to do it</div>
+        <div class="how-body">The code is already written in <code>anchor_agent_langchain.py</code>. Steps:</div>
+    </div>
+    <div class="steps">
+        <div class="step-item"><div class="step-num">1</div><div>Install: <code>pip install langchain langchain-google-genai langchain-community tavily-python</code></div></div>
+        <div class="step-item"><div class="step-num">2</div><div>Sign up for Tavily at tavily.com (free tier). Add <code>TAVILY_API_KEY</code> to .env file.</div></div>
+        <div class="step-item"><div class="step-num">3</div><div>Import the new agent in server.py: <code>from anchor_agent_langchain import anchor_agent_decide_v2</code></div></div>
+        <div class="step-item"><div class="step-num">4</div><div>Replace every <code>anchor_agent_decide(event_summary)</code> call in server.py with <code>anchor_agent_decide_v2(event_summary, session_state, observation_history, add_observation)</code></div></div>
+        <div class="step-item"><div class="step-num">5</div><div>Connect the tool functions to actual server functions: <code>speak_to_user</code> should call <code>speak()</code>, <code>suggest_break</code> should set <code>break_active = True</code>, etc.</div></div>
+        <div class="step-item"><div class="step-num">6</div><div>Test: run server.py, start a session, drift a few times. The terminal should show the agent's reasoning chain with tool calls.</div></div>
+    </div>
+    <div class="file-ref">File: anchor_agent_langchain.py (ready, just needs integration into server.py)</div>
+</div>
+
+<!-- LEFT 3: Agora Voice -->
+<div class="item">
+    <div class="item-title">
+        <span class="badge badge-todo">TO DO</span>
+        <span class="badge badge-person">Person C</span>
+        3. Agora two-way voice channel
+    </div>
+    <div class="what">Persistent audio channel so the user can SPEAK back to Anchor instead of clicking buttons.</div>
+    <div class="time-est">~4-5 hours</div>
+    <div class="how">
+        <div class="how-label">How to do it</div>
+        <div class="how-body">Three parts: (1) Agora audio channel in React, (2) ElevenLabs audio plays through Agora instead of local speakers, (3) Speech-to-text transcribes user's spoken response.</div>
+    </div>
+    <div class="steps">
+        <div class="step-item"><div class="step-num">1</div><div>Sign up for Agora at console.agora.io. Create a project, get App ID.</div></div>
+        <div class="step-item"><div class="step-num">2</div><div>Install in React: <code>npm install agora-rtc-sdk-ng</code></div></div>
+        <div class="step-item"><div class="step-num">3</div><div>When session starts, join an Agora channel. No audio/video published yet -- just the connection.</div></div>
+        <div class="step-item"><div class="step-num">4</div><div>When agent speaks, stream ElevenLabs audio into the Agora channel instead of playing locally.</div></div>
+        <div class="step-item"><div class="step-num">5</div><div>Capture user's microphone via Agora. Send audio to speech-to-text (Deepgram streaming API or ElevenLabs STT).</div></div>
+        <div class="step-item"><div class="step-num">6</div><div>Send transcribed text back to the agent as a user response event.</div></div>
+        <div class="step-item"><div class="step-num">7</div><div>Sign up for Deepgram at console.deepgram.com (free $200 credits). Add <code>DEEPGRAM_API_KEY</code> to .env.</div></div>
+    </div>
+    <div class="how">
+        <div class="how-label">Fallback if Agora doesn't work in time</div>
+        <div class="how-body">ElevenLabs voice plays locally through Python (already working). User clicks buttons on the React UI instead of speaking. The demo still works -- just less magical. Voice as primary, buttons as fallback.</div>
+    </div>
+</div>
+
+<!-- LEFT 4: Pattern Agent -->
+<div class="item">
+    <div class="item-title">
+        <span class="badge badge-todo">TO DO</span>
+        <span class="badge badge-person">Person B (after Task 2)</span>
+        4. Pattern Agent + Supermemory
+    </div>
+    <div class="what">Post-session agent that analyzes all past sessions, discovers patterns, and makes the next session smarter.</div>
+    <div class="time-est">~2-3 hours</div>
+    <div class="how">
+        <div class="how-label">How to do it</div>
+        <div class="how-body">Sign up for Supermemory. After session ends (in <code>/session/end</code> endpoint), save the session summary + observation history to Supermemory with a user ID. Create a Pattern Agent that reads ALL past sessions from Supermemory, sends them to Gemini with a prompt asking it to discover patterns (focus duration per task type, time-of-day effects, drift triggers, self-correction rate). Save the resulting profile back to Supermemory. At session start, load the profile and include it in the Anchor Agent's prompt.</div>
+    </div>
+    <div class="steps">
+        <div class="step-item"><div class="step-num">1</div><div>Sign up for Supermemory and get API key.</div></div>
+        <div class="step-item"><div class="step-num">2</div><div>After session ends, save session log to Supermemory: <code>supermemory.add(user_id, session_summary)</code></div></div>
+        <div class="step-item"><div class="step-num">3</div><div>Create pattern_agent.py that retrieves all past sessions and sends to Gemini for analysis.</div></div>
+        <div class="step-item"><div class="step-num">4</div><div>Save the user profile back to Supermemory.</div></div>
+        <div class="step-item"><div class="step-num">5</div><div>At session start, load profile and add to Anchor Agent's prompt context.</div></div>
+    </div>
+</div>
+
+<!-- LEFT 5: Polish -->
+<div class="item">
+    <div class="item-title">
+        <span class="badge badge-todo">TO DO</span>
+        <span class="badge badge-person">Everyone</span>
+        5. Polish, test end-to-end, rehearse demo
+    </div>
+    <div class="what">Test everything working together. Practice the 3-minute demo. Prepare pitch slides.</div>
+    <div class="time-est">~2 hours</div>
+    <div class="how">
+        <div class="how-label">Demo script to rehearse</div>
+        <div class="how-body">ONE task: "filling out volunteer application." 0:00-0:30 pitch + problem. 0:30-0:45 declare task, DND, expecting Slack. 0:45-1:15 working on app (silent), opens Claude for help (silent), opens Reddit (voice speaks). 1:15-1:45 comes back, drifts again, agent escalates. 1:45-2:15 WhatsApp appears (unsure, asks), Claude wrong topic (catches it). 2:15-2:30 session summary. 2:30-3:00 enterprise pitch + Pattern Agent.</div>
+    </div>
+</div>
+
+</div>
+
+<!-- KILL ORDER -->
+<div style="background:#FFF9ED;border:2px dashed #EAC066;border-radius:14px;padding:20px 24px;margin-bottom:32px">
+    <div style="font-weight:600;font-size:15px;color:#854F0B;margin-bottom:10px">Kill order if running behind:</div>
+    <div style="font-size:13.5px;color:#666;line-height:1.7">
+        <strong>If behind at hour 12:</strong> Cut Pattern Agent (Task 4) and Agora voice (Task 3). Use ElevenLabs locally + buttons.<br>
+        <strong>If behind at hour 9:</strong> Also cut LangChain agent (Task 2). Keep the direct Gemini agent -- it works perfectly.<br>
+        <strong>Minimum viable demo:</strong> Frontend connected to backend (Task 1) + existing server.py. That gives you: real window monitoring, content-aware classification, voice nudges, drift detection, task initiation, session summary. All working. A polished demo of working features beats a buggy demo of more features every time.
+    </div>
+</div>
+
+<!-- REPO STRUCTURE -->
+<div style="background:white;border:1px solid #E8E6E0;border-radius:14px;padding:20px 24px;margin-bottom:32px">
+    <div style="font-weight:600;font-size:15px;margin-bottom:12px">Repository: github.com/Antarathapliyal31/testing-web</div>
+    <div class="code-block">testing-web/
+  server.py                    -- THE backend (watcher + classifier + agent + voice + API)
+  anchor_agent_langchain.py    -- LangChain agent upgrade (Person B Saturday)
+  test_voice.py                -- ElevenLabs voice test (5 messages)
+  test_window_reader.py        -- standalone window watcher test
+  .env                         -- API keys (GEMINI, ELEVENLABS, add TAVILY + AGORA Saturday)
+  .gitignore
+  frontend/                    -- React app from Lovable
+    src/
+    package.json</div>
+</div>
+
+<!-- HOW TO RUN -->
+<div style="background:white;border:1px solid #E8E6E0;border-radius:14px;padding:20px 24px">
+    <div style="font-weight:600;font-size:15px;margin-bottom:12px">How to run (Saturday morning)</div>
+    <div class="code-block"># Terminal 1: Backend
+cd ~/testing-web
+pip install fastapi uvicorn google-genai elevenlabs python-dotenv pynput
+python server.py
+
+# Terminal 2: Frontend
+cd ~/testing-web/frontend
+npm install
+npm run dev
+
+# Terminal 3: Test (until frontend is connected)
+curl -X POST http://localhost:8000/session/start \
+  -H "Content-Type: application/json" \
+  -d '{"task": "filling out volunteer application", "duration": 30}'</div>
+</div>
+
+<div class="footer">
+    Anchor -- YHack Spring 2026 | March 27, 2026<br>
+    20 features built. 5 tasks left. 18 hours to ship.
+</div>
+
+</div>
