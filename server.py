@@ -357,6 +357,11 @@ def get_history_text(last_n: int = 25) -> str:
     return "\n".join(f"[{o['elapsed_min']}m] {o['summary']}" for o in recent)
 
 
+async def anchor_agent_decide_async(new_event_summary: str) -> dict:
+    """Async wrapper so monitoring loop doesn't block."""
+    return await asyncio.to_thread(anchor_agent_decide, new_event_summary)
+
+
 def anchor_agent_decide(new_event_summary: str) -> dict:
     """LangChain agent with 6 tools. Falls back to direct Gemini if LangChain fails."""
 
@@ -422,10 +427,13 @@ If ever_on_task is False, say "you're on [actual app] -- ready to open your [tas
 If ever_on_task is True, the user HAS already worked on their task before. Do NOT use task initiation language like "let's get started", "3, 2, 1", "ready to open your task?", or "let's begin". Instead, acknowledge they were working and gently redirect: "You were doing great on [task]. Ready to jump back in?" or "You stepped away from [task]. Need a break or want to get back?"
 NEVER repeat phrasing from previous nudges in the history."""
 
-    # Try LangChain agent first
+    # Try LangChain agent first (run in thread to avoid blocking monitoring loop)
     try:
         print(f"  [AGENT] LangChain agent thinking...")
-        result = agent_executor.invoke({"input": agent_input})
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            future = pool.submit(agent_executor.invoke, {"input": agent_input})
+            result = future.result(timeout=20)  # 20 second max
         output = result.get("output", "")
 
         # Check if any tool was called by looking at intermediate steps
@@ -510,23 +518,45 @@ Return ONLY JSON:
 elevenlabs_client = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
 VOICE_ID = "CwhRBWXzGAHq8TQ4Fs17"  # Roger
 
+current_voice_process = None  # Track the afplay process so we can kill it
+
+def stop_speaking():
+    """Stop any currently playing voice immediately."""
+    global current_voice_process
+    if current_voice_process and current_voice_process.poll() is None:
+        current_voice_process.kill()
+        print("  [VOICE] Stopped (user self-corrected)", flush=True)
+        current_voice_process = None
+
 async def speak(message: str):
-    try:
-        print(f'\nSpeaking: "{message}"')
-        audio = elevenlabs_client.text_to_speech.convert(
-            text=message,
-            voice_id=VOICE_ID,
-            model_id="eleven_multilingual_v2",
-            output_format="mp3_44100_128",
-        )
-        await asyncio.to_thread(play, audio)
-        print("Done.")
-    except Exception as e:
-        print(f"[VOICE ERROR] {type(e).__name__}: {e}")
-        if hasattr(e, 'status_code'):
-            print(f"[VOICE ERROR] Status code: {e.status_code}")
-        if hasattr(e, 'body'):
-            print(f"[VOICE ERROR] Body: {e.body}")
+    """Generate and play voice in a background thread -- NEVER blocks the event loop.
+    Can be cancelled by calling stop_speaking() when user returns to task."""
+    global current_voice_process
+    def _generate_and_play():
+        global current_voice_process
+        try:
+            print(f'\nSpeaking: "{message}"', flush=True)
+            audio = elevenlabs_client.text_to_speech.convert(
+                text=message,
+                voice_id=VOICE_ID,
+                model_id="eleven_multilingual_v2",
+                output_format="mp3_44100_128",
+            )
+            audio_bytes = b"".join(audio)
+            import tempfile, subprocess
+            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=True) as f:
+                f.write(audio_bytes)
+                f.flush()
+                proc = subprocess.Popen(["afplay", f.name])
+                current_voice_process = proc
+                proc.wait(timeout=15)
+            print("Done speaking.", flush=True)
+        except Exception as e:
+            print(f"[VOICE ERROR] {repr(e)}", flush=True)
+        finally:
+            current_voice_process = None
+    # Fire and forget in background thread
+    threading.Thread(target=_generate_and_play, daemon=True).start()
 
 
 def speak_sync(message: str):
@@ -673,15 +703,30 @@ print("[AGENT] LangChain agent with 6 tools created.")
 
 
 def speak_sync(message: str):
-    """Synchronous voice for use inside LangChain tools (which are sync)."""
+    """Synchronous voice for use inside LangChain tools (which are sync).
+    Plays audio in a background thread so it doesn't block the monitoring loop."""
     try:
         print(f'\n  [TOOL: speak] "{message}"', flush=True)
         audio = elevenlabs_client.text_to_speech.convert(
             text=message, voice_id=VOICE_ID,
             model_id="eleven_multilingual_v2", output_format="mp3_44100_128",
         )
-        play(audio)
-        print("  [TOOL: speak] Done.", flush=True)
+        # Consume the generator into bytes so we can pass to thread
+        audio_bytes = b"".join(audio)
+        # Play in background thread so monitoring loop isn't blocked
+        import threading
+        def _play():
+            try:
+                import subprocess
+                import tempfile
+                with tempfile.NamedTemporaryFile(suffix=".mp3", delete=True) as f:
+                    f.write(audio_bytes)
+                    f.flush()
+                    subprocess.run(["afplay", f.name], timeout=15)
+                print("  [TOOL: speak] Done.", flush=True)
+            except Exception as e:
+                print(f"  [VOICE PLAY ERROR] {repr(e)}", flush=True)
+        threading.Thread(target=_play, daemon=True).start()
     except Exception as e:
         import traceback
         print(f"  [VOICE ERROR] {repr(e)}", flush=True)
@@ -830,11 +875,40 @@ async def broadcast(event: dict):
     disconnected = []
     for ws in connected_clients:
         try:
-            await ws.send_json(event)
+            await asyncio.wait_for(ws.send_json(event), timeout=2)
         except:
             disconnected.append(ws)
     for ws in disconnected:
-        connected_clients.remove(ws)
+        try:
+            connected_clients.remove(ws)
+        except ValueError:
+            pass
+
+
+async def nudge_and_speak(decision: dict, extra_broadcast: dict = None):
+    """Broadcast nudge to frontend first (so Smiski shows up), then speak via ElevenLabs.
+    This keeps the visual and audio in sync -- Smiski appears while voice plays."""
+    nudge_event = {
+        "type": "nudge",
+        "nudge_type": decision.get("action", "speak"),
+        "message": decision.get("message", ""),
+        "options": decision.get("options", []),
+    }
+    if extra_broadcast:
+        nudge_event.update(extra_broadcast)
+    # Broadcast FIRST so Smiski walks in immediately
+    try:
+        await broadcast(nudge_event)
+    except Exception as e:
+        print(f"  [BROADCAST ERROR] {repr(e)}")
+    # Then speak (voice plays while Smiski is visible) -- with timeout so it doesn't hang
+    if not decision.get("already_spoken") and decision.get("message"):
+        try:
+            await asyncio.wait_for(speak(decision["message"]), timeout=15)
+        except asyncio.TimeoutError:
+            print("  [VOICE] Timed out after 15s")
+        except Exception as e:
+            print(f"  [VOICE ERROR in nudge_and_speak] {repr(e)}")
 
 
 @app.websocket("/ws")
@@ -859,8 +933,11 @@ async def websocket_endpoint(websocket: WebSocket):
                 add_observation("User started a 5-minute break", "break_started")
                 await broadcast({"type": "break_started", "duration": 300})
 
-            elif action == "im_ready":
-                add_observation("User clicked: I'm ready (task initiation)", "user_response")
+            elif action == "skip_break" or action == "im_ready":
+                session_state["break_active"] = False
+                session_state["drift_count"] = 0
+                add_observation("User skipped break / is ready", "user_response")
+                await broadcast({"type": "break_ended"})
                 await broadcast({"type": "status", "value": "focused"})
 
             elif action == "got_it":
@@ -875,17 +952,10 @@ async def websocket_endpoint(websocket: WebSocket):
 
                     # Feed to agent for response
                     event_summary = f'User spoke via voice: "{user_text}". Respond to what they said in context of the session.'
-                    decision = anchor_agent_decide(event_summary)
+                    decision = await anchor_agent_decide_async(event_summary)
                     if decision["action"] != "stay_silent":
                         print(f'  [AGENT] Responding to voice: {decision["message"]}')
-                        if not decision.get("already_spoken"):
-                            await speak(decision["message"])
-                        await broadcast({
-                            "type": "nudge",
-                            "nudge_type": decision["action"],
-                            "message": decision["message"],
-                            "options": decision.get("options", [])
-                        })
+                        await nudge_and_speak(decision)
 
     except WebSocketDisconnect:
         connected_clients.remove(websocket)
@@ -904,8 +974,8 @@ async def audio_websocket(websocket: WebSocket):
         while True:
             # Receive binary audio data from frontend
             data = await websocket.receive_bytes()
-            if len(data) < 1000:
-                continue  # Skip tiny chunks (silence/noise)
+            if len(data) < 2000:
+                continue  # Skip tiny chunks (likely silence)
 
             print(f"  [AUDIO-WS] Received {len(data)} bytes, sending to ElevenLabs STT...")
 
@@ -931,17 +1001,10 @@ async def audio_websocket(websocket: WebSocket):
                     if session_active:
                         add_observation(f'User said via voice: "{text}"', "user_voice")
                         event_summary = f'User spoke via voice: "{text}". Respond to what they said in context of the session.'
-                        decision = anchor_agent_decide(event_summary)
+                        decision = await anchor_agent_decide_async(event_summary)
                         if decision["action"] != "stay_silent":
                             print(f'  [AGENT] Responding to voice: {decision["message"]}')
-                            if not decision.get("already_spoken"):
-                                await speak(decision["message"])
-                            await broadcast({
-                                "type": "nudge",
-                                "nudge_type": decision["action"],
-                                "message": decision["message"],
-                                "options": decision.get("options", [])
-                            })
+                            await nudge_and_speak(decision)
                 else:
                     print("  [STT] No speech detected in chunk")
 
@@ -975,28 +1038,29 @@ async def monitoring_loop():
     print("\n[MONITOR] Starting monitoring loop...")
 
     while session_active:
-        title = get_active_window_title()
+        title = await asyncio.to_thread(get_active_window_title)
         elapsed = round((time.time() - session_state["start_time"]) / 60, 1)
 
         # Check if break should end
         if session_state.get("break_active") and session_state.get("break_start"):
             break_duration = time.time() - session_state["break_start"]
-            if break_duration >= 300:  # 5 minutes
+            if break_duration >= 180:  # 3 minutes
                 session_state["break_active"] = False
+                session_state["drift_count"] = 0  # Reset drift count after break
                 add_observation("Break ended", "break_ended")
                 await broadcast({"type": "break_ended"})
-                await speak("Break's over. Ready to get back?")
-                await broadcast({
-                    "type": "nudge",
-                    "nudge_type": "speak",
-                    "message": "Break's over. Ready to get back?",
-                    "options": ["Let's go"]
-                })
+                task = session_state.get("task", "your task")
+                encouragement_messages = [
+                    f"Great reset! Your brain just got a fresh tank of focus fuel. What's the ONE small thing you'll do first on {task}? Just that one thing, nothing else.",
+                    f"Welcome back! That break just gave your brain what it needed. You've got this. Pick the easiest part of {task} and start there. Momentum builds fast once you begin.",
+                    f"Break done! Fun fact: ADHD research shows 3 minutes of movement restores more focus than 30 minutes of scrolling. You just did the smart thing. Now, what's one tiny step on {task}?",
+                ]
+                message = encouragement_messages[int(time.time()) % len(encouragement_messages)]
+                decision = {"action": "speak", "message": message, "options": ["Let's go"]}
+                await nudge_and_speak(decision)
 
-        # Skip monitoring during breaks
-        if session_state.get("break_active"):
-            await asyncio.sleep(5)
-            continue
+        # During breaks, still monitor but don't nudge for drifts (they're on break)
+        # If they skip break via button, break_active will be set to False
 
         # Window changed
         if title != last_title:
@@ -1010,7 +1074,8 @@ async def monitoring_loop():
             session_state["sustained_drift_nudged"] = False
             session_state["idle_nudged"] = False
 
-            result = classify_window(
+            result = await asyncio.to_thread(
+                classify_window,
                 session_state["task_context"],
                 title,
                 session_state.get("expected_notifications", "")
@@ -1045,82 +1110,56 @@ async def monitoring_loop():
             })
 
             if verdict == "relevant":
+                stop_speaking()  # Stop any playing nudge -- user self-corrected
                 add_observation(f"Window: {title} --> relevant ({confidence:.0%})")
                 await broadcast({"type": "status", "value": "focused"})
                 print(f"  [MONITOR] [{elapsed}m] RELEVANT: {title[:60]}")
 
             elif verdict == "drift":
-                notification_note = " This was likely a NOTIFICATION PULL (app popped up on its own, user didn't deliberately navigate here). Be extra gentle." if is_notification_pull else " User deliberately navigated here."
-                add_observation(f"Window: {title} --> drift ({confidence:.0%}). Reason: {reason}.{notification_note}")
-                event_summary = f"Window changed to: {title} --> drift ({confidence:.0%}). Reason: {reason}. Total drifts: {session_state['drift_count']}.{notification_note}"
+                add_observation(f"Window: {title} --> drift ({confidence:.0%}). Reason: {reason}.")
+                print(f"  [MONITOR] [{elapsed}m] DRIFT: {title[:60]}", flush=True)
 
-                print(f"  [MONITOR] [{elapsed}m] DRIFT: {title[:60]}")
-
-                # Known distraction sites get an immediate voice nudge
-                title_lower = title.lower()
-                known_distractions = ["youtube", "netflix", "reddit", "twitter", "x.com",
-                                      "instagram", "tiktok", "facebook", "twitch", "hulu", "discord"]
-                is_known_distraction = any(site in title_lower for site in known_distractions)
-
-                if is_known_distraction:
-                    site_name = next((s for s in known_distractions if s in title_lower), "that site")
-                    site_name = site_name.capitalize()
+                try:
+                    drift_count = session_state["drift_count"]
                     task = session_state.get("task", "your task")
-                    immediate_messages = [
-                        f"Hey, you just opened {site_name}. Let's get back to {task}!",
-                        f"Looks like you wandered to {site_name}. Ready to get back to {task}?",
-                        f"I see {site_name} is open. Remember, you're working on {task}!",
-                    ]
-                    message = random.choice(immediate_messages)
-                    print(f"  [MONITOR] Known distraction: {site_name} — immediate nudge")
-                    await speak(message)
-                    await broadcast({
-                        "type": "nudge",
-                        "nudge_type": "speak",
-                        "message": message,
-                        "source": site_name,
-                        "options": ["Pull me back", "Taking a break"],
-                        "drift_count": session_state["drift_count"]
-                    })
-                    await broadcast({"type": "status", "value": "drifted"})
-                else:
-                    decision = anchor_agent_decide(event_summary)
+                    # Extract meaningful site/content name from title
+                    # "Google Chrome - YouTube - Google Chrome - User" -> "YouTube"
+                    # "Google Chrome - Reddit - Google Chrome" -> "Reddit"
+                    parts = [p.strip() for p in title.split(" - ") if p.strip().lower() not in ("google chrome", "mozilla firefox", "safari", "microsoft edge")]
+                    window_short = parts[0][:40] if parts else title.split(" - ")[0].strip()[:40]
 
-                    if decision["action"] != "stay_silent":
-                        print(f"  [AGENT] {decision['action'].upper()}: {decision['message']}")
-                        if not decision.get("already_spoken"):
-                            await speak(decision["message"])
-                        await broadcast({
-                            "type": "nudge",
-                            "nudge_type": decision["action"],
-                            "message": decision["message"],
-                            "options": decision.get("options", []),
-                            "drift_count": session_state["drift_count"]
-                        })
-                        await broadcast({"type": "status", "value": "drifted"})
+                    if drift_count >= 3:
+                        break_messages = [
+                            f"You've drifted {drift_count} times now. Your brain needs a reset. Take a 3-minute break -- stretch, grab water. Stay off your phone!",
+                            f"Hey, {drift_count} drifts. Your brain is running low on fuel. Quick 3-minute reset -- walk around, get fresh air.",
+                            f"You keep getting pulled away. Take 3 minutes -- jumping jacks or water. Physical breaks restore focus better than willpower.",
+                        ]
+                        message = random.choice(break_messages)
+                        print(f"  [MONITOR] Drift #{drift_count} — suggesting break", flush=True)
+                        session_state["break_active"] = True
+                        session_state["break_start"] = time.time()
+                        decision = {"action": "suggest_break", "message": message, "options": ["Take a break", "Keep going"]}
+                        await nudge_and_speak(decision, {"drift_count": drift_count, "nudge_type": "suggest_break"})
+                        await broadcast({"type": "break_started", "duration": 180})
                     else:
-                        print(f"  [AGENT] Staying silent: {decision['reason']}")
+                        drift_messages = [
+                            f"You just switched to {window_short}. That's not your task. Ready to get back to {task}?",
+                            f"I see you're on {window_short} now. Your task is {task} -- want to jump back?",
+                            f"Looks like {window_short} pulled you away from {task}. Break or get back?",
+                        ]
+                        message = random.choice(drift_messages)
+                        print(f"  [MONITOR] Drift #{drift_count}: {window_short} — instant nudge", flush=True)
+                        decision = {"action": "speak", "message": message, "options": ["Pull me back", "Taking a break"]}
+                        await nudge_and_speak(decision, {"drift_count": drift_count})
+                    await broadcast({"type": "status", "value": "drifted"})
+                except Exception as e:
+                    print(f"  [DRIFT ERROR] {repr(e)}", flush=True)
+                    import traceback
+                    traceback.print_exc()
 
             elif verdict == "unsure":
-                notification_note = " This was likely a NOTIFICATION PULL (app popped up on its own)." if is_notification_pull else ""
-                add_observation(f"Window: {title} --> unsure ({confidence:.0%}). Reason: {reason}.{notification_note}")
-                event_summary = f"Window changed to: {title} --> unsure ({confidence:.0%}). Reason: {reason}.{notification_note}"
-
+                add_observation(f"Window: {title} --> unsure ({confidence:.0%}). Reason: {reason}.")
                 print(f"  [MONITOR] [{elapsed}m] UNSURE: {title[:60]}")
-
-                decision = anchor_agent_decide(event_summary)
-
-                if decision["action"] != "stay_silent":
-                    print(f"  [AGENT] {decision['action'].upper()}: {decision['message']}")
-                    if not decision.get("already_spoken"):
-                        await speak(decision["message"])
-                    await broadcast({
-                        "type": "nudge",
-                        "nudge_type": decision["action"],
-                        "message": decision["message"],
-                        "options": decision.get("options", ["Yes, it's for my task", "I drifted"]),
-                        "drift_count": session_state["drift_count"]
-                    })
 
             last_title = title
 
@@ -1136,16 +1175,9 @@ async def monitoring_loop():
                     event_summary = f"User has been on '{last_relevant_window}' for {time_on_window:.1f} minutes. Might have drifted within this app."
                     print(f"  [MONITOR] Long stay: {time_on_window:.1f}min on {last_relevant_window[:40]}")
 
-                    decision = anchor_agent_decide(event_summary)
+                    decision = await anchor_agent_decide_async(event_summary)
                     if decision["action"] != "stay_silent":
-                        if not decision.get("already_spoken"):
-                            await speak(decision["message"])
-                        await broadcast({
-                            "type": "nudge",
-                            "nudge_type": decision["action"],
-                            "message": decision["message"],
-                            "options": decision.get("options", [])
-                        })
+                        await nudge_and_speak(decision)
                     relevant_window_start = time.time()
 
             if last_title and last_title in classification_cache:
@@ -1160,17 +1192,10 @@ async def monitoring_loop():
                         event_summary = f"User has been on drift app '{last_title}' for {sustained_minutes:.1f} minutes without leaving."
                         print(f"  [MONITOR] Sustained drift: {sustained_minutes:.1f}min on {last_title[:40]}")
 
-                        decision = anchor_agent_decide(event_summary)
+                        decision = await anchor_agent_decide_async(event_summary)
                         if decision["action"] != "stay_silent":
                             print(f"  [AGENT] SUSTAINED DRIFT: {decision['message']}")
-                            if not decision.get("already_spoken"):
-                                await speak(decision["message"])
-                            await broadcast({
-                                "type": "nudge",
-                                "nudge_type": decision["action"],
-                                "message": decision["message"],
-                                "options": decision.get("options", [])
-                            })
+                            await nudge_and_speak(decision)
                         session_state["sustained_drift_nudged"] = True
 
             activity_type = session_state.get("task_context", {}).get("activity_type", "mixed")
@@ -1184,34 +1209,38 @@ async def monitoring_loop():
                 event_summary = f"User has the correct window open but has had NO keyboard or mouse activity for {idle_minutes:.1f} minutes (threshold for {activity_type} task: {idle_threshold} min)."
                 print(f"  [MONITOR] Silent drift: {idle_minutes:.1f}min idle")
 
-                decision = anchor_agent_decide(event_summary)
+                decision = await anchor_agent_decide_async(event_summary)
                 if decision["action"] != "stay_silent":
                     print(f"  [AGENT] SILENT DRIFT: {decision['message']}")
-                    if not decision.get("already_spoken"):
-                        await speak(decision["message"])
-                    await broadcast({
-                        "type": "nudge",
-                        "nudge_type": "silent_drift",
-                        "message": decision["message"],
-                        "options": ["I'm here", "Taking a break"]
-                    })
+                    await nudge_and_speak(decision, {"nudge_type": "silent_drift", "options": ["I'm here", "Taking a break"]})
                 session_state["idle_nudged"] = True
 
-            if not session_state.get("ever_on_task") and not session_state.get("task_initiation_nudged") and elapsed >= 0.67:  # ~40 seconds
-                event_summary = f"User has been in session for {elapsed} minutes but NEVER opened a task-relevant app. Task initiation paralysis."
-                print(f"  [MONITOR] Task initiation timeout: {elapsed}min, never on task")
+            if not session_state.get("ever_on_task") and elapsed >= 0.083:  # ~5 seconds
+                last_initiation_nudge = session_state.get("last_initiation_nudge_time", 0)
+                time_since_last = time.time() - last_initiation_nudge if last_initiation_nudge else 999
 
-                decision = anchor_agent_decide(event_summary)
-                if decision["action"] != "stay_silent":
-                    if not decision.get("already_spoken"):
-                        await speak(decision["message"])
-                    await broadcast({
-                        "type": "nudge",
-                        "nudge_type": "task_initiation",
-                        "message": decision["message"],
-                        "options": ["I'm ready"]
-                    })
-                session_state["task_initiation_nudged"] = True
+                if time_since_last >= 30:  # Re-nudge every 30 seconds if user still hasn't started
+                    nudge_count = session_state.get("initiation_nudge_count", 0)
+                    task = session_state.get("task", "your task")
+
+                    # Fast instant responses -- no slow agent call
+                    if nudge_count == 0:
+                        message = f"Hey! Ready to start {task}? Let's open it up. 3, 2, 1, go!"
+                    elif nudge_count == 1:
+                        message = f"Still haven't started {task}. Getting started is the hardest part with ADHD. Just open the app -- that's your only job right now."
+                    elif nudge_count == 2:
+                        message = f"It's been a while. What's making it hard to start {task}? Sometimes just doing the tiniest first step helps break the paralysis."
+                    else:
+                        message = f"You've been putting off {task} for a bit. That's okay -- ADHD makes starting really hard. How about just looking at it for 30 seconds? No pressure to do anything."
+
+                    print(f"  [MONITOR] Task initiation: {elapsed}min, reminder #{nudge_count + 1}")
+
+                    # Re-check ever_on_task before speaking
+                    if not session_state.get("ever_on_task"):
+                        decision = {"action": "speak", "message": message}
+                        await nudge_and_speak(decision, {"nudge_type": "task_initiation", "options": ["I'm ready"]})
+                    session_state["last_initiation_nudge_time"] = time.time()
+                    session_state["initiation_nudge_count"] = nudge_count + 1
 
             last_break = session_state.get("last_break_time", session_state.get("start_time", time.time()))
             minutes_since_break = (time.time() - last_break) / 60
@@ -1219,16 +1248,9 @@ async def monitoring_loop():
                 event_summary = f"User has been focused for {minutes_since_break:.0f} minutes without a break. Possible hyperfocus."
                 print(f"  [MONITOR] Hyperfocus: {minutes_since_break:.0f}min without break")
 
-                decision = anchor_agent_decide(event_summary)
+                decision = await anchor_agent_decide_async(event_summary)
                 if decision["action"] != "stay_silent":
-                    if not decision.get("already_spoken"):
-                        await speak(decision["message"])
-                    await broadcast({
-                        "type": "nudge",
-                        "nudge_type": "suggest_break",
-                        "message": decision["message"],
-                        "options": ["Take a break", "Keep going"]
-                    })
+                    await nudge_and_speak(decision, {"nudge_type": "suggest_break", "options": ["Take a break", "Keep going"]})
                 session_state["last_break_time"] = time.time()
 
         # ── Phone detection via webcam ──────────────────────────────

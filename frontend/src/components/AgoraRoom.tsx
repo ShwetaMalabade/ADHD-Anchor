@@ -62,8 +62,19 @@ const AgoraRoom = ({ onUserSpeech }: AgoraRoomProps) => {
   // Start recording mic audio and sending chunks to backend
   const startRecording = useCallback(async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream, { mimeType: "audio/webm;codecs=opus" });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          noiseSuppression: true,
+          echoCancellation: true,
+          autoGainControl: true,
+          sampleRate: 16000,
+          channelCount: 1,
+        }
+      });
+      const recorder = new MediaRecorder(stream, {
+        mimeType: "audio/webm;codecs=opus",
+        audioBitsPerSecond: 64000,
+      });
       recorderRef.current = recorder;
       chunksRef.current = [];
 
@@ -107,9 +118,9 @@ const AgoraRoom = ({ onUserSpeech }: AgoraRoomProps) => {
             }
           }, 200);
         }
-        silenceTimerRef.current = setTimeout(sendChunks, 4000);
+        silenceTimerRef.current = setTimeout(sendChunks, 6000);
       };
-      silenceTimerRef.current = setTimeout(sendChunks, 4000);
+      silenceTimerRef.current = setTimeout(sendChunks, 6000);
     } catch (err) {
       console.error("[AUDIO] Recording failed:", err);
     }
@@ -139,7 +150,11 @@ const AgoraRoom = ({ onUserSpeech }: AgoraRoomProps) => {
       console.log("[AGORA] Joined channel:", CHANNEL_NAME);
 
       // Create and publish mic track
-      const micTrack = await AgoraRTC.createMicrophoneAudioTrack();
+      const micTrack = await AgoraRTC.createMicrophoneAudioTrack({
+        AEC: true,   // Acoustic echo cancellation
+        ANS: true,   // Automatic noise suppression
+        AGC: true,   // Automatic gain control
+      });
       micTrackRef.current = micTrack;
       await client.publish([micTrack]);
       console.log("[AGORA] Mic published");
