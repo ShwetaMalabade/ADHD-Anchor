@@ -790,8 +790,8 @@ async def websocket_endpoint(websocket: WebSocket):
             elif action == "taking_break":
                 session_state["break_active"] = True
                 session_state["break_start"] = time.time()
-                add_observation("User started a quick break", "break_started")
-                await broadcast({"type": "break_started", "duration": 60})
+                add_observation("User started a 5-minute break", "break_started")
+                await broadcast({"type": "break_started", "duration": 300})
 
             elif action == "skip_break" or action == "im_ready":
                 session_state["break_active"] = False
@@ -925,7 +925,7 @@ async def monitoring_loop():
         # Check if break should end
         if session_state.get("break_active") and session_state.get("break_start"):
             break_duration = time.time() - session_state["break_start"]
-            if break_duration >= 60:  # 1 minute (demo mode)
+            if break_duration >= 300:  # 5 minutes
                 session_state["break_active"] = False
                 session_state["drift_count"] = 0  # Reset drift count after break
                 add_observation("Break ended", "break_ended")
@@ -1036,7 +1036,7 @@ async def monitoring_loop():
                         session_state["break_start"] = time.time()
                         decision = {"action": "suggest_break", "message": message, "options": ["Take a break", "Keep going"]}
                         await nudge_and_speak(decision, {"drift_count": drift_count, "nudge_type": "suggest_break"})
-                        await broadcast({"type": "break_started", "duration": 60})
+                        await broadcast({"type": "break_started", "duration": 300})
                     else:
                         drift_messages = [
                             f"You just switched to {window_short}. That's not your task. Ready to get back to {task}?",
