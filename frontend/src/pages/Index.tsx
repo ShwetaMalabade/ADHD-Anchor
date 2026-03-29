@@ -10,7 +10,7 @@ import SessionSummary from "@/components/SessionSummary";
 import AgoraRoom from "@/components/AgoraRoom";
 import SmiskiCompanion from "@/components/SmiskiCompanion";
 import WelcomeScreen from "@/components/WelcomeScreen";
-import DemoLog, { type LogEntry } from "@/components/DemoLog";
+import DemoLog, { type LogEntry, type NoteEntry } from "@/components/DemoLog";
 
 type Screen = "welcome" | "start" | "dnd" | "focusing" | "break" | "summary" | "done";
 type FocusStatus = "focused" | "checking" | "drifted";
@@ -40,6 +40,15 @@ const Index = () => {
   const [sessionLog, setSessionLog] = useState<LogEntry[]>([]);
   const logIdCounter = useRef(0);
   const elapsedRef = useRef(0);
+  const [notes, setNotes] = useState<NoteEntry[]>([]);
+  const noteIdCounter = useRef(0);
+  const [isListeningForNotes, setIsListeningForNotes] = useState(false);
+  const [noteEvent, setNoteEvent] = useState<{ text: string; id: number } | null>(null);
+  const buddyMode = useRef<"idle" | "awaiting_note" | "awaiting_reply">("idle");
+  const [buddyPromptEvent, setBuddyPromptEvent] = useState<{ id: number } | null>(null);
+  const buddyPromptCounter = useRef(0);
+  const [buddyAckEvent, setBuddyAckEvent] = useState<{ text: string; id: number } | null>(null);
+  const buddyAckCounter = useRef(0);
 
   useEffect(() => { elapsedRef.current = elapsed; }, [elapsed]);
 
@@ -50,6 +59,111 @@ const Index = () => {
     const elapsedStr = sec >= 60 ? `${Math.floor(sec / 60)}m ${sec % 60}s elapsed` : `${sec}s elapsed`;
     setSessionLog((prev) => [...prev, { id: logIdCounter.current, timestamp: ts, elapsed: elapsedStr, type, icon, message }]);
   };
+
+  const addNote = (text: string) => {
+    noteIdCounter.current += 1;
+    const ts = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
+    const id = noteIdCounter.current;
+    setNotes((prev) => [...prev, { id, timestamp: ts, text }]);
+    addLog("response", "\u{1F4DD}", `Note saved: "${text}"`);
+    setNoteEvent({ text, id });
+  };
+
+  const deleteNote = (id: number) => {
+    setNotes((prev) => prev.filter((n) => n.id !== id));
+  };
+
+  // Voice-triggered note-taking during focus sessions
+  useEffect(() => {
+    if (screen !== "focusing" || isPaused) {
+      setIsListeningForNotes(false);
+      return;
+    }
+
+    const SpeechRecognition = (window as unknown as Record<string, unknown>).SpeechRecognition
+      || (window as unknown as Record<string, unknown>).webkitSpeechRecognition;
+    if (!SpeechRecognition) return;
+
+    type SREvent = { results: { transcript: string; isFinal?: boolean }[][]; resultIndex: number };
+    const recognition = new (SpeechRecognition as new () => {
+      continuous: boolean;
+      interimResults: boolean;
+      onresult: ((e: SREvent) => void) | null;
+      onerror: ((e: { error: string }) => void) | null;
+      onend: (() => void) | null;
+      start: () => void;
+      stop: () => void;
+    })();
+    recognition.continuous = true;
+    recognition.interimResults = false;
+
+    let alive = true;
+
+    recognition.onresult = (e: SREvent) => {
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const transcript = e.results[i][0].transcript.toLowerCase().trim();
+        const raw = e.results[i][0].transcript.trim();
+
+        // "hey buddy" trigger — Smiski walks in and asks what to note
+        if (buddyMode.current === "idle" && /hey\s+buddy/i.test(transcript)) {
+          buddyMode.current = "awaiting_note";
+          buddyPromptCounter.current += 1;
+          setBuddyPromptEvent({ id: buddyPromptCounter.current });
+          addLog("response", "\u{1F44B}", "User: \"Hey buddy!\"");
+          continue;
+        }
+
+        // Awaiting note content — capture whatever they say as the note
+        if (buddyMode.current === "awaiting_note") {
+          const noteText = raw.charAt(0).toUpperCase() + raw.slice(1);
+          addNote(noteText);
+          buddyMode.current = "awaiting_reply";
+          continue;
+        }
+
+        // Awaiting follow-up reply — acknowledge and go back to idle
+        if (buddyMode.current === "awaiting_reply") {
+          buddyMode.current = "idle";
+          buddyAckCounter.current += 1;
+          setBuddyAckEvent({ text: raw, id: buddyAckCounter.current });
+          addLog("response", "\u{1F4AC}", `User replied: "${raw}"`);
+          continue;
+        }
+
+        // Direct trigger: "note <content>", "please note <content>", "hey buddy note <content>"
+        const match = transcript.match(/(?:hey\s+buddy\s+)?(?:please\s+)?note\s+(?:that\s+)?(.+)/);
+        if (match && match[1]) {
+          const noteMatch = raw.match(/(?:[Hh]ey\s+[Bb]uddy\s+)?(?:[Pp]lease\s+)?[Nn]ote\s+(?:[Tt]hat\s+)?(.+)/);
+          const noteText = noteMatch ? noteMatch[1] : match[1];
+          addNote(noteText.charAt(0).toUpperCase() + noteText.slice(1));
+        }
+      }
+    };
+
+    recognition.onerror = (e: { error: string }) => {
+      if (e.error === "no-speech" || e.error === "aborted") return;
+      console.warn("[NOTES] Speech recognition error:", e.error);
+    };
+
+    recognition.onend = () => {
+      if (alive) {
+        try { recognition.start(); } catch {}
+      }
+    };
+
+    try {
+      recognition.start();
+      setIsListeningForNotes(true);
+    } catch {
+      setIsListeningForNotes(false);
+    }
+
+    return () => {
+      alive = false;
+      setIsListeningForNotes(false);
+      try { recognition.stop(); } catch {}
+    };
+  }, [screen, isPaused]);
 
   // Timer
   useEffect(() => {
@@ -271,6 +385,11 @@ const Index = () => {
     setLongestStreak(0);
     currentStreak.current = 0;
     setSessionLog([]);
+    setNotes([]);
+    setNoteEvent(null);
+    buddyMode.current = "idle";
+    setBuddyPromptEvent(null);
+    setBuddyAckEvent(null);
   };
 
   const finalTimeline = timeline.length > 0 ? timeline : [
@@ -289,10 +408,15 @@ const Index = () => {
   return (
     <div className="min-h-screen bg-background">
       <BackgroundBlob />
-      <DemoLog entries={sessionLog} />
+      {(screen === "focusing" || screen === "break" || screen === "summary") && (
+        <DemoLog entries={sessionLog} notes={notes} isListening={isListeningForNotes} onDeleteNote={deleteNote} />
+      )}
       <SmiskiCompanion
         nudgeText={activeNudge?.text}
         nudgeId={activeNudge?.id}
+        noteEvent={noteEvent}
+        buddyPromptEvent={buddyPromptEvent}
+        buddyAckEvent={buddyAckEvent}
         onTakeBreak={handleTakeBreak}
         onPullBack={handlePullBack}
         onEndSession={handleEndSession}

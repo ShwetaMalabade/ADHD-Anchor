@@ -13,7 +13,10 @@ import numpy as np
 import mediapipe as mp
 from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision
-from ultralytics import YOLO
+try:
+    from ultralytics import YOLO
+except ImportError:
+    YOLO = None
 
 # ============================================================
 # MODEL DOWNLOADS
@@ -83,15 +86,8 @@ class ActivityDetector:
         self.activity_start_time = time.time()
         self.idle_start = None
 
-        # YOLO for phone detection — run every N frames to reduce GPU contention
-        try:
-            self.yolo = YOLO("yolov8n.pt")
-            self.yolo.fuse()
-            print("[YOLO] Loading YOLOv8n model...")
-            print("[YOLO] Model ready.")
-        except Exception as e:
-            print(f"[YOLO] Failed to load: {e}")
-            self.yolo = None
+        # YOLO disabled — causes segfault on Apple Silicon (Metal GPU conflict with MediaPipe)
+        self.yolo = None
         self.yolo_phone_detected = False
         self.yolo_frame_counter = 0
 
