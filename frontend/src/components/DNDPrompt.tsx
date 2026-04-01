@@ -1,13 +1,35 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 
+const BACKEND_URL = "http://localhost:8000";
+
 interface Props {
   onContinue: (dnd: boolean, expectedNotifications: string) => void;
 }
 
 const DNDPrompt = ({ onContinue }: Props) => {
-  const [step, setStep] = useState<"ask" | "expecting" | "transition">("ask");
+  const [step, setStep] = useState<"ask" | "expecting" | "enabling" | "transition">("ask");
   const [expectation, setExpectation] = useState("");
+  const [dndResult, setDndResult] = useState<"success" | "failed" | null>(null);
+
+  const handleEnableDND = async () => {
+    setStep("enabling");
+    try {
+      const res = await fetch(`${BACKEND_URL}/dnd/enable`, { method: "POST" });
+      const data = await res.json();
+      if (data.status === "enabled") {
+        setDndResult("success");
+        setTimeout(() => onContinue(true, ""), 1500);
+      } else {
+        // Auto-toggle failed -- let user know but still proceed
+        setDndResult("failed");
+        setTimeout(() => onContinue(true, ""), 2500);
+      }
+    } catch {
+      setDndResult("failed");
+      setTimeout(() => onContinue(true, ""), 2500);
+    }
+  };
 
   const handleLetsBegin = () => {
     setStep("transition");
@@ -49,10 +71,10 @@ const DNDPrompt = ({ onContinue }: Props) => {
               </div>
               <div className="space-y-3">
                 <button
-                  onClick={() => onContinue(true, "")}
+                  onClick={handleEnableDND}
                   className="btn-primary-action w-full rounded-2xl py-3.5 font-semibold"
                 >
-                  Done, turned it on
+                  Yes, turn it on for me
                 </button>
                 <button
                   onClick={() => setStep("expecting")}
@@ -87,6 +109,43 @@ const DNDPrompt = ({ onContinue }: Props) => {
               >
                 Let's begin
               </button>
+            </motion.div>
+          ) : step === "enabling" ? (
+            <motion.div
+              key="enabling"
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="py-8 text-center space-y-4"
+            >
+              {dndResult === null ? (
+                <>
+                  <div className="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-sage border-t-transparent" />
+                  <p className="text-lg font-medium text-muted-foreground">
+                    Turning on Do Not Disturb...
+                  </p>
+                </>
+              ) : dndResult === "success" ? (
+                <>
+                  <div className="mx-auto h-12 w-12 rounded-full bg-sage-light flex items-center justify-center">
+                    <span className="text-2xl">✅</span>
+                  </div>
+                  <p className="text-lg font-medium text-sage">
+                    Do Not Disturb is on. Starting your session...
+                  </p>
+                </>
+              ) : (
+                <>
+                  <div className="mx-auto h-12 w-12 rounded-full bg-amber-50 flex items-center justify-center">
+                    <span className="text-2xl">⚠️</span>
+                  </div>
+                  <p className="text-lg font-medium text-foreground">
+                    Couldn't toggle DND automatically.
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    Please turn it on manually from Control Center. Starting session anyway...
+                  </p>
+                </>
+              )}
             </motion.div>
           ) : (
             <motion.div

@@ -12,12 +12,14 @@ Run: uvicorn main:app --reload --port 8000
 """
 
 import os
+import sys
 import json
 import time
 import asyncio
 import subprocess
 import threading
 import random
+import platform
 import cv2
 from datetime import datetime
 from collections import Counter
@@ -39,6 +41,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_classic.agents import create_tool_calling_agent, AgentExecutor
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.tools import tool
+from calendar_tool import make_calendar_tool
 
 # Tavily (optional -- works without it, better with it)
 try:
@@ -209,6 +212,83 @@ gemini_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 connected_clients: list[WebSocket] = []
 
 # ============================================================
+# DO NOT DISTURB CONTROL (macOS)
+# ============================================================
+def _toggle_focus_macos(enable: bool) -> bool:
+    """Toggle Focus mode on macOS via Control Center checkbox (AXIdentifier: controlcenter-focus-modes)"""
+    if platform.system() != "Darwin":
+        print("[DND] Not on macOS, skipping")
+        return False
+
+    action = "enable" if enable else "disable"
+    target_value = 0 if enable else 1  # current value we need to click (0=off, click to turn on)
+
+    script = f'''
+    function run() {{
+        const se = Application("System Events");
+        const cc = se.processes.byName("ControlCenter");
+        const menuItems = cc.menuBars[0].menuBarItems;
+
+        // Find and click the Control Center menu bar item
+        for (let i = 0; i < menuItems.length; i++) {{
+            if (menuItems[i].description().includes("Control")) {{
+                menuItems[i].click();
+                delay(0.7);
+
+                const win = cc.windows[0];
+                const grp = win.groups[0];
+                const checkboxes = grp.checkboxes;
+
+                // Find the Focus modes checkbox by AXIdentifier
+                for (let j = 0; j < checkboxes.length; j++) {{
+                    try {{
+                        const ident = checkboxes[j].attributes.byName("AXIdentifier").value();
+                        if (ident === "controlcenter-focus-modes") {{
+                            const currentVal = checkboxes[j].value();
+                            if (currentVal === {target_value}) {{
+                                checkboxes[j].click();
+                                delay(0.3);
+                            }}
+                            se.keyCode(53); // Escape to close
+                            return "ok";
+                        }}
+                    }} catch(e) {{}}
+                }}
+
+                se.keyCode(53);
+                return "not_found";
+            }}
+        }}
+        return "no_control_center";
+    }}
+    '''
+    try:
+        result = subprocess.run(
+            ["osascript", "-l", "JavaScript", "-e", script],
+            capture_output=True, text=True, timeout=10
+        )
+        if "ok" in result.stdout:
+            print(f"[DND] Focus {action}d via Control Center")
+            return True
+        print(f"[DND] Control Center result: {result.stdout.strip()} | {result.stderr.strip()}")
+    except (subprocess.TimeoutExpired, Exception) as e:
+        print(f"[DND] osascript failed: {e}")
+
+    print(f"[DND] Could not {action} Focus automatically")
+    return False
+
+
+def enable_dnd_macos() -> bool:
+    """Enable Focus / Do Not Disturb on macOS"""
+    return _toggle_focus_macos(enable=True)
+
+
+def disable_dnd_macos() -> bool:
+    """Disable Focus / Do Not Disturb on macOS"""
+    return _toggle_focus_macos(enable=False)
+
+
+# ============================================================
 # DATA MODELS (what React sends and receives)
 # ============================================================
 class SessionStartRequest(BaseModel):
@@ -238,11 +318,27 @@ def get_active_window_title() -> str:
     """Read the currently active window (macOS + Windows)"""
     import platform
     if platform.system() == "Darwin":
+        # Try multiple methods to get the most informative window title
         script = '''
         tell application "System Events"
-            set frontApp to name of first application process whose frontmost is true
-            set frontAppName to name of first window of (first application process whose frontmost is true)
-            return frontApp & " - " & frontAppName
+            set frontProc to first application process whose frontmost is true
+            set appName to name of frontProc
+            try
+                set winTitle to name of front window of frontProc
+                if winTitle is not "" and winTitle is not missing value then
+                    return appName & " - " & winTitle
+                end if
+            end try
+            -- Some apps (Notes, Calendar, etc.) don't expose window names
+            -- Try getting the displayed name of the front application instead
+            try
+                set frontAppName to displayed name of frontProc
+                if frontAppName is not appName then
+                    return appName & " - " & frontAppName
+                end if
+            end try
+            -- Last resort: just the app name
+            return appName
         end tell
         '''
         try:
@@ -282,11 +378,14 @@ def create_task_context(task_description: str) -> dict:
     """Build semantic understanding of the task using Gemini"""
     prompt = f"""A user is about to start a focus session. Their task is: "{task_description}"
 
-Analyze this task and return a JSON object with:
+Analyze this task deeply and return a JSON object with:
 - "task": the task description cleaned up
 - "domain": what field/topics this task involves (comma separated)
+- "keywords": list of 15-25 specific keywords, terms, technologies, concepts, names, and phrases someone working on this task would encounter in window titles. Be EXHAUSTIVE -- include synonyms, abbreviations, related tools, libraries, frameworks, subtopics, and adjacent concepts. For example, a "React coding" task should include: react, javascript, typescript, jsx, tsx, npm, node, webpack, vite, tailwind, css, html, component, hook, state, redux, nextjs, vercel, stackoverflow, github, mdn, etc.
+- "related_topics": list of 5-10 broader topics/fields that are legitimately related (e.g., for "machine learning homework" include: statistics, linear algebra, python, data science, neural networks, etc.)
 - "likely_tools": list of apps and tools they might legitimately use
-- "likely_sites": list of websites they might legitimately visit
+- "likely_sites": list of specific websites and domains they might legitimately visit (e.g., stackoverflow.com, github.com, docs.python.org, arxiv.org, etc.). Be generous -- include 10-20 sites.
+- "drift_categories": list of 5-10 website/content categories that are DEFINITELY unrelated to this task (e.g., for a coding task: "cooking recipes", "celebrity news", "fashion", "sports scores", "real estate listings")
 - "activity_type": one of "reading", "writing", "coding", "browsing", "mixed"
 - "always_ok": apps that are always fine regardless of task (music players, calculator, etc.). NEVER include messaging apps like WhatsApp, Slack, iMessage, Telegram in always_ok.
 
@@ -318,7 +417,13 @@ def classify_window(task_context: dict, window_title: str, expected_notification
     skip_words = {"google chrome", "mozilla firefox", "safari", "microsoft edge", "electron", "new tab", ""}
     meaningful_parts = [p.strip() for p in window_title.split(" - ") if p.strip().lower() not in skip_words and len(p.strip()) > 1]
     if not meaningful_parts:
-        return {"verdict": "unsure", "confidence": 0.3, "reason": "Empty/loading page", "is_anchor": True}
+        # If the full title is a known app name (not just a browser), still classify it
+        bare_app = window_title.strip().lower()
+        if bare_app and bare_app not in skip_words:
+            # It's a native app like "Notes", "Calendar" etc. -- let the LLM classify it
+            meaningful_parts = [window_title.strip()]
+        else:
+            return {"verdict": "unsure", "confidence": 0.3, "reason": "Empty/loading page", "is_anchor": True}
 
     if window_title in classification_cache:
         cached = classification_cache[window_title].copy()
@@ -335,13 +440,28 @@ def classify_window(task_context: dict, window_title: str, expected_notification
     if expected_notifications:
         notifications_context = f"\nUSER IS EXPECTING NOTIFICATIONS FROM: {expected_notifications} (be lenient with this specific app)"
 
-    prompt = f"""You are a focus assistant. Decide if this window is RELEVANT to the task or DRIFT.
+    keywords = ', '.join(task_context.get('keywords', []))
+    related_topics = ', '.join(task_context.get('related_topics', []))
+    likely_sites = ', '.join(task_context.get('likely_sites', []))
+    drift_categories = ', '.join(task_context.get('drift_categories', []))
+
+    prompt = f"""You are a strict focus classifier. Decide if this window is RELEVANT to the task or DRIFT.
 
 USER'S TASK: {task_context.get('task', '')}
 DOMAIN: {task_context.get('domain', '')}
+TASK KEYWORDS (terms the user would encounter while on-task): {keywords}
+RELATED TOPICS (broader fields that count as relevant): {related_topics}
 LIKELY TOOLS: {', '.join(task_context.get('likely_tools', []))}
+LIKELY SITES: {likely_sites}
+KNOWN DRIFT CATEGORIES (definitely unrelated): {drift_categories}
 CURRENT WINDOW: {window_title}
 {notifications_context}
+
+CLASSIFICATION METHOD -- follow these steps mentally:
+Step 1: Extract the CONTENT from the window title (ignore app name, browser name, separators).
+Step 2: Does the content contain ANY of the task keywords or related topics? If yes → likely relevant.
+Step 3: Does the content fall into any of the known drift categories? If yes → drift.
+Step 4: If neither, ask: "Would a person doing THIS SPECIFIC TASK need to look at this page?" Be strict -- if you can't articulate a direct connection, it's drift.
 
 CRITICAL RULES:
 1. The APP NAME alone does NOT determine relevance. The CONTENT shown in the window title determines relevance.
@@ -352,26 +472,34 @@ CRITICAL RULES:
 
 2. Social messaging apps (WhatsApp, iMessage, Telegram, Discord, Facebook Messenger, Slack) = ALWAYS "unsure". Never classify as drift.
 
-3. Social media (Twitter, Instagram, Reddit, TikTok) = "drift" unless content in title clearly relates to task.
+3. Social media (Twitter/X, Instagram, Reddit, TikTok, Facebook, LinkedIn feed) = "drift" UNLESS the specific content/post in the title clearly relates to a task keyword or related topic. "Reddit - r/machineLearning" for an ML task = relevant. "Reddit - r/AmItheAsshole" for an ML task = drift.
 
-4. Shopping sites (Amazon, eBay) = "drift" always.
+4. Shopping sites (Amazon, eBay, Flipkart, AliExpress) = "drift" always unless the task is specifically about shopping/product research.
 
-4b. Streaming/entertainment sites (Netflix, Hulu, Disney+, Twitch, Spotify web player) = "drift" unless the task specifically involves watching something on that platform.
+4b. Streaming/entertainment sites (Netflix, Hulu, Disney+, Twitch, Spotify web player, Prime Video) = "drift" unless the task specifically involves watching something on that platform.
 
-5. AI tools (ChatGPT, Claude, Gemini) = READ THE CONVERSATION TITLE. If topic matches task = "relevant". If unrelated = "drift". If no title visible = "unsure".
+5. AI tools (ChatGPT, Claude, Gemini, Copilot, Perplexity) = READ THE CONVERSATION TITLE. If topic matches any task keyword or related topic = "relevant". If clearly unrelated = "drift". If no title visible = "unsure".
 
-6. Terminal/command line/VS Code/Electron = "relevant" ONLY if user's task involves coding. Otherwise "drift". "Electron - ADHD-Anchor" or any IDE window is NOT relevant for reading/writing/browsing tasks.
+6. Terminal/command line/VS Code/Electron/IDE windows = "relevant" ONLY if user's task involves coding or technical work. Otherwise "drift". "Electron - ADHD-Anchor" or any IDE window is NOT relevant for reading/writing/browsing tasks.
 
-7. Educational/academic content (lectures, tutorials, courses) on ANY platform (YouTube, Coursera, Khan Academy) = "relevant" if the content topic is related to the task's academic domain. A research lecture is relevant to reading a research paper.
+7. Educational/academic content (lectures, tutorials, courses, documentation) on ANY platform = "relevant" if the content topic matches task keywords or related topics.
 
 8. "New Tab", blank pages, or pages with no clear content = "unsure".
 
 9. Numeric IDs like "2501.00148", "2002.06673" are arXiv research paper IDs. If the task involves reading/research, these are ALWAYS "relevant".
 
-10. MOST IMPORTANT: Read the FULL window title carefully. Ask yourself: "Is what this person is looking at RIGHT NOW directly helping them complete their task?" If the answer is no, it's "drift". Don't be generous -- if the website content has nothing to do with the task, classify as "drift" even if the app itself could theoretically be useful. Netflix for a reading task = drift. YouTube cooking video for a coding task = drift. A login page for a site unrelated to the task = drift.
+10. News sites (CNN, BBC, NYT, HN) = "drift" UNLESS the specific article title relates to task keywords. "Hacker News" alone for a coding task = "drift" (it's browsing, not working). "HN - Show HN: New React compiler" for a React coding task = "relevant".
+
+11. Email/calendar (Gmail, Outlook) = "unsure" (could be task-related communication).
+
+12. Gaming sites (Steam, Epic Games, Roblox, game wikis) = "drift" unless the task involves game development.
+
+13. STRICTNESS RULE: When in doubt between "relevant" and "drift", choose "drift". It is better to flag a borderline site and be corrected than to let real drift go unnoticed. Only classify as "relevant" when you can clearly explain the connection to the task.
+
+14. WEBSITE CONTENT MATTERS: A site like "docs.google.com - Untitled Document" is "unsure" (could be anything). "docs.google.com - ML Assignment 3" for an ML task is "relevant". "docs.google.com - Wedding Guest List" for an ML task is "drift". Always read what comes after the site name.
 
 Return ONLY JSON:
-{{"verdict": "relevant" or "drift" or "unsure", "confidence": 0.0 to 1.0, "reason": "brief explanation"}}"""
+{{"verdict": "relevant" or "drift" or "unsure", "confidence": 0.0 to 1.0, "reason": "brief explanation of what content you identified and why it is/isn't related to the task"}}"""
 
     try:
         start = time.time()
@@ -456,14 +584,18 @@ def anchor_agent_decide(new_event_summary: str) -> dict:
     else:
         cooldown = 8  # ~time for one voice message to finish
 
-    if session_state.get("last_nudge_time"):
-        since_nudge = time.time() - session_state["last_nudge_time"]
-        if since_nudge < cooldown:
-            return {"action": "stay_silent", "message": "", "options": [],
-                    "reason": f"Cooldown: {cooldown}s ({nudge_count_recent} recent nudges)"}
+    # Check if this is a user-initiated voice request (calendar, question, etc.) -- always process these
+    is_user_voice = "User spoke via voice" in new_event_summary
 
-    if session_state.get("break_active"):
-        return {"action": "stay_silent", "message": "", "options": [], "reason": "On break"}
+    if not is_user_voice:
+        if session_state.get("last_nudge_time"):
+            since_nudge = time.time() - session_state["last_nudge_time"]
+            if since_nudge < cooldown:
+                return {"action": "stay_silent", "message": "", "options": [],
+                        "reason": f"Cooldown: {cooldown}s ({nudge_count_recent} recent nudges)"}
+
+        if session_state.get("break_active"):
+            return {"action": "stay_silent", "message": "", "options": [], "reason": "On break"}
 
     history = get_history_text()
 
@@ -722,13 +854,24 @@ def search_adhd_strategy(situation: str) -> str:
 
 @tool
 def suggest_dnd(reason: str) -> str:
-    """Suggest user enable Do Not Disturb. Use when notifications keep pulling
+    """Enable Do Not Disturb on the user's device. Use when notifications keep pulling
     user away -- pattern of fast window switches to messaging apps."""
-    msg = f"You might want to turn on Do Not Disturb. {reason}"
     print(f'\n  [TOOL: suggest_dnd] {reason}')
-    speak_sync(msg)
-    return f"Suggested DND: {reason}"
+    success = enable_dnd_macos()
+    if success:
+        msg = f"I've turned on Do Not Disturb for you. {reason}"
+        speak_sync(msg)
+        session_state["dnd_enabled"] = True
+        return f"DND enabled successfully: {reason}"
+    else:
+        msg = f"You should turn on Do Not Disturb. {reason}"
+        speak_sync(msg)
+        return f"Suggested DND (auto-toggle failed): {reason}"
 
+
+
+# Create calendar tool (needs speak_sync which is defined above)
+add_calendar_event = make_calendar_tool(speak_sync)
 
 # ============================================================
 # CREATE LANGCHAIN AGENT
@@ -739,13 +882,14 @@ You understand executive function depletion (Barkley's fuel tank model), time bl
 task initiation paralysis, hyperfocus risks, and good vs bad breaks.
 You are warm, supportive, never accusatory.
 
-6 TOOLS -- choose based on WHY the user is struggling:
+7 TOOLS -- choose based on WHY the user is struggling:
 1. speak_to_user: Gentle nudges, encouragement. Most common tool.
 2. ask_user: Need user input via voice. Unsure apps, checking if stuck.
 3. suggest_break: Brain depleted. 20+ min focused then crashing, 3+ drifts in 5 min, 3+ nudges ignored. Physical activity only, never phone.
 4. chunk_task: Overwhelmed, stuck, or avoiding. SMALLEST possible next step specific to their task.
 5. search_adhd_strategy: Standard approaches failing. Research-backed fresh approach. Use sparingly.
 6. suggest_dnd: Notifications keep pulling user away.
+7. add_calendar_event: User asks to add a reminder, meeting, or event to their calendar. Parse their natural language to extract title, date (YYYY-MM-DD), time (HH:MM 24hr), and duration. Convert 'tomorrow' to actual date, '3pm' to '15:00'. Today's date: use current date context.
 
 DIAGNOSIS -- diagnose BEFORE choosing tool:
 * DEPLETED: Focused 20+ min then drifting -> suggest_break
@@ -776,7 +920,7 @@ When user is focused: NO tool calls (stay silent)."""
 
 def create_anchor_agent():
     llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.7)
-    tools = [speak_to_user, ask_user, suggest_break, chunk_task, search_adhd_strategy, suggest_dnd]
+    tools = [speak_to_user, ask_user, suggest_break, chunk_task, search_adhd_strategy, suggest_dnd, add_calendar_event]
     prompt = ChatPromptTemplate.from_messages([
         ("system", AGENT_SYSTEM_PROMPT),
         ("human", "{input}"),
@@ -787,7 +931,7 @@ def create_anchor_agent():
 
 
 agent_executor = create_anchor_agent()
-print("[AGENT] LangChain agent with 6 tools created.")
+print("[AGENT] LangChain agent with 7 tools created.")
 
 
 def speak_sync(message: str):
@@ -879,12 +1023,19 @@ def search_adhd_strategy(situation: str) -> str:
 
 @tool
 def suggest_dnd(reason: str) -> str:
-    """Suggest user enable Do Not Disturb. Use when notifications keep pulling
+    """Enable Do Not Disturb on the user's device. Use when notifications keep pulling
     user away -- pattern of fast window switches to messaging apps."""
-    msg = f"You might want to turn on Do Not Disturb. {reason}"
     print(f'\n  [TOOL: suggest_dnd] {reason}')
-    speak_sync(msg)
-    return f"Suggested DND: {reason}"
+    success = enable_dnd_macos()
+    if success:
+        msg = f"I've turned on Do Not Disturb for you. {reason}"
+        speak_sync(msg)
+        session_state["dnd_enabled"] = True
+        return f"DND enabled successfully: {reason}"
+    else:
+        msg = f"You should turn on Do Not Disturb. {reason}"
+        speak_sync(msg)
+        return f"Suggested DND (auto-toggle failed): {reason}"
 
 
 # ============================================================
@@ -896,13 +1047,14 @@ You understand executive function depletion (Barkley's fuel tank model), time bl
 task initiation paralysis, hyperfocus risks, and good vs bad breaks.
 You are warm, supportive, never accusatory.
 
-6 TOOLS -- choose based on WHY the user is struggling:
+7 TOOLS -- choose based on WHY the user is struggling:
 1. speak_to_user: Gentle nudges, encouragement. Most common tool.
 2. ask_user: Need user input via voice. Unsure apps, checking if stuck.
 3. suggest_break: Brain depleted. 20+ min focused then crashing, 3+ drifts in 5 min, 3+ nudges ignored. Physical activity only, never phone.
 4. chunk_task: Overwhelmed, stuck, or avoiding. SMALLEST possible next step specific to their task.
 5. search_adhd_strategy: Standard approaches failing. Research-backed fresh approach. Use sparingly.
 6. suggest_dnd: Notifications keep pulling user away.
+7. add_calendar_event: User asks to add a reminder, meeting, or event to their calendar. Parse their natural language to extract title, date (YYYY-MM-DD), time (HH:MM 24hr), and duration. Convert 'tomorrow' to actual date, '3pm' to '15:00'. Today's date: use current date context.
 
 DIAGNOSIS -- diagnose BEFORE choosing tool:
 * DEPLETED: Focused 20+ min then drifting -> suggest_break
@@ -942,7 +1094,7 @@ Do NOT just output text -- you MUST invoke a tool. Outputting text without calli
 
 def create_anchor_agent():
     llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.7)
-    tools = [speak_to_user, ask_user, suggest_break, chunk_task, search_adhd_strategy, suggest_dnd]
+    tools = [speak_to_user, ask_user, suggest_break, chunk_task, search_adhd_strategy, suggest_dnd, add_calendar_event]
     prompt = ChatPromptTemplate.from_messages([
         ("system", AGENT_SYSTEM_PROMPT),
         ("human", "{input}"),
@@ -970,9 +1122,110 @@ async def broadcast(event: dict):
             pass
 
 
+last_nudge_broadcast_time = 0
+
+_overlay_process = None
+
+def kill_overlay():
+    """Kill any existing overlay process"""
+    global _overlay_process
+    if _overlay_process and _overlay_process.poll() is None:
+        _overlay_process.terminate()
+        _overlay_process = None
+    # Also kill any orphaned overlay processes
+    subprocess.run(["pkill", "-f", "overlay.py"], capture_output=True)
+
+def show_native_overlay(message: str, options: list = None):
+    """Show a native macOS floating overlay on top of all apps (works even with DND on)"""
+    global _overlay_process
+    if platform.system() != "Darwin":
+        return
+
+    # Kill any existing overlay
+    if _overlay_process and _overlay_process.poll() is None:
+        _overlay_process.terminate()
+
+    try:
+        cmd = [sys.executable, os.path.join(os.path.dirname(__file__), "overlay.py"), message]
+        if options and len(options) > 0:
+            cmd += ["--options", "||".join(options)]
+        else:
+            cmd += ["--duration", "6"]
+        _overlay_process = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+        )
+        print(f"  [OVERLAY] Showing: {message[:50]}...")
+
+        # Read the user's selection in a background thread
+        def _read_overlay_response():
+            try:
+                stdout, _ = _overlay_process.communicate(timeout=120)
+                selected = stdout.decode().strip()
+                if not selected or selected == "__dismissed__":
+                    print(f"  [OVERLAY] Dismissed without selection")
+                    return
+                print(f"  [OVERLAY] User selected: {selected}")
+                # Process the selection using the fuzzy intent matcher
+                # and broadcast to frontend via the event loop
+                import asyncio
+                loop = asyncio.get_event_loop()
+
+                async def _handle_overlay_selection():
+                    # Simulate a WebSocket option_select action
+                    session_state["waiting_for_response"] = False
+                    # Use the same fuzzy matching from option_select
+                    t = selected.lower()
+                    if any(w in t for w in ["pull me back", "back", "let's go", "keep going", "i'm back"]):
+                        # Bring user back to focus
+                        task = session_state.get("task", "your task")
+                        if session_state.get("break_active"):
+                            session_state["break_active"] = False
+                            session_state["drift_count"] = 0
+                            await broadcast({"type": "break_ended"})
+                        await broadcast({"type": "status", "value": "focused"})
+                        msg = f"Let's get back to {task}!"
+                        await broadcast({"type": "nudge", "nudge_type": "speak", "message": msg, "options": []})
+                    elif any(w in t for w in ["break", "take a break"]):
+                        session_state["break_active"] = True
+                        session_state["break_start"] = time.time()
+                        await broadcast({"type": "break_started", "duration": 300})
+                    elif any(w in t for w in ["important", "let me check"]):
+                        msg = "No problem! How long do you think you'll need?"
+                        show_native_overlay(msg, ["Just a minute", "About 5 minutes", "More than 5 minutes"])
+                    elif any(w in t for w in ["just a min", "1 min", "a minute"]):
+                        session_state["notification_pause"] = True
+                        session_state["notification_pause_until"] = time.time() + 60
+                        await broadcast({"type": "notification_pause", "duration": 60})
+                    elif any(w in t for w in ["5 min", "about 5", "few min"]):
+                        session_state["notification_pause"] = True
+                        session_state["notification_pause_until"] = time.time() + 300
+                        await broadcast({"type": "notification_pause", "duration": 300})
+                    elif any(w in t for w in ["more than", "long"]):
+                        session_state["notification_pause"] = True
+                        session_state["notification_pause_until"] = time.time() + 600
+                        await broadcast({"type": "notification_pause", "duration": 600})
+                    elif any(w in t for w in ["later", "get back", "ignore", "not now"]):
+                        task = session_state.get("task", "your task")
+                        await broadcast({"type": "status", "value": "focused"})
+
+                asyncio.run_coroutine_threadsafe(_handle_overlay_selection(), loop)
+            except:
+                pass
+        threading.Thread(target=_read_overlay_response, daemon=True).start()
+
+    except Exception as e:
+        print(f"  [OVERLAY] Failed: {e}")
+
+
 async def nudge_and_speak(decision: dict, extra_broadcast: dict = None, context_window: str = None):
-    """Broadcast nudge to frontend first (so Smiski shows up), then queue voice.
-    context_window: if set, voice is skipped if user already left that window."""
+    """Broadcast nudge to frontend + native overlay + voice.
+    Minimum 3s between any two nudge broadcasts to prevent Smiski message spam."""
+    global last_nudge_broadcast_time
+    if time.time() - last_nudge_broadcast_time < 3:
+        print(f"  [NUDGE] Skipped broadcast (too soon): {decision.get('message', '')[:40]}", flush=True)
+        return
+    last_nudge_broadcast_time = time.time()
+
     nudge_event = {
         "type": "nudge",
         "nudge_type": decision.get("action", "speak"),
@@ -985,8 +1238,15 @@ async def nudge_and_speak(decision: dict, extra_broadcast: dict = None, context_
         await broadcast(nudge_event)
     except Exception as e:
         print(f"  [BROADCAST ERROR] {repr(e)}")
-    if not decision.get("already_spoken") and decision.get("message"):
-        await speak(decision["message"], context_window=context_window)
+
+    # Show native floating overlay on top of all apps
+    msg = decision.get("message", "")
+    options = decision.get("options", [])
+    if msg:
+        show_native_overlay(msg, options)
+
+    if not decision.get("already_spoken") and msg:
+        await speak(msg, context_window=context_window)
 
 
 @app.websocket("/ws")
@@ -1070,6 +1330,110 @@ async def websocket_endpoint(websocket: WebSocket):
             elif action == "got_it":
                 add_observation("User clicked: Got it (notification acknowledged)", "user_response")
                 await broadcast({"type": "status", "value": "focused"})
+
+            elif action == "option_select":
+                option = data.get("option", "").strip().lower()
+
+                # Fuzzy keyword matching -- user can say things in many ways
+                def match_intent(text):
+                    t = text.lower()
+                    # Important / urgent / need to check
+                    if any(w in t for w in ["important", "urgent", "need to", "let me check", "have to", "must", "emergency", "critical"]):
+                        return "its_important"
+                    # Get back later / ignore / not now
+                    if any(w in t for w in ["later", "ignore", "not now", "skip", "don't need", "nah", "no", "get back"]):
+                        return "get_back_later"
+                    # Time: ~1 minute
+                    if any(w in t for w in ["a minute", "one minute", "1 minute", "quick", "sec", "second", "real quick", "just a min"]):
+                        return "just_a_minute"
+                    # Time: ~5 minutes
+                    if any(w in t for w in ["5 min", "five min", "about 5", "few minutes", "couple minutes", "2 min", "3 min", "4 min"]):
+                        return "about_5_minutes"
+                    # Time: more than 5
+                    if any(w in t for w in ["more than", "long", "10 min", "a while", "lot of time", "15 min", "half hour", "not sure how long"]):
+                        return "more_than_5"
+                    # Yes / for my task / relevant
+                    if any(w in t for w in ["yes", "yeah", "yep", "for my task", "relevant", "related", "working on", "need it", "it's for"]):
+                        return "its_for_my_task"
+                    # Drifted / off track
+                    if any(w in t for w in ["drift", "off track", "distracted", "not for", "oops", "got distracted", "my bad"]):
+                        return "i_drifted"
+                    # Break
+                    if any(w in t for w in ["break", "rest", "pause", "step away", "breathe"]):
+                        return "taking_break"
+                    # Keep going / back / ready
+                    if any(w in t for w in ["keep going", "continue", "i'm back", "back", "ready", "let's go", "go", "got it", "okay", "ok"]):
+                        return "got_it"
+                    return "got_it"
+
+                mapped = match_intent(option)
+                print(f"  [WS] Option selected: '{option}' -> {mapped}")
+                # Re-dispatch as the mapped action
+                data["action"] = mapped
+                action = mapped
+                # Fall through to matching handler above -- re-process
+                # (We need to re-check since we changed action)
+                if mapped == "its_important":
+                    add_observation("User says notification is important, asked for time estimate", "user_response")
+                    message = "No problem! How long do you think you'll need to handle this?"
+                    decision = {"action": "ask", "message": message, "options": ["Just a minute", "About 5 minutes", "More than 5 minutes"]}
+                    await nudge_and_speak(decision, {"drift_count": session_state["drift_count"]})
+                    session_state["waiting_for_response"] = True
+                    session_state["waiting_since"] = time.time()
+                elif mapped == "get_back_later":
+                    add_observation("User chose to ignore notification and stay focused", "user_response")
+                    task = session_state.get("task", "your task")
+                    message = f"Good call! Let's stay on {task}."
+                    decision = {"action": "speak", "message": message}
+                    await nudge_and_speak(decision)
+                    await broadcast({"type": "status", "value": "focused"})
+                elif mapped == "just_a_minute":
+                    add_observation("User stepping away for ~1 minute to handle notification", "user_response")
+                    message = "Got it, I'll check back in a minute!"
+                    decision = {"action": "speak", "message": message}
+                    await nudge_and_speak(decision)
+                    session_state["notification_pause"] = True
+                    session_state["notification_pause_until"] = time.time() + 60
+                    await broadcast({"type": "notification_pause", "duration": 60})
+                elif mapped == "about_5_minutes":
+                    add_observation("User stepping away for ~5 minutes to handle notification", "user_response")
+                    message = "Take your time. I'll nudge you in 5 minutes if you're not back."
+                    decision = {"action": "speak", "message": message}
+                    await nudge_and_speak(decision)
+                    session_state["notification_pause"] = True
+                    session_state["notification_pause_until"] = time.time() + 300
+                    await broadcast({"type": "notification_pause", "duration": 300})
+                elif mapped == "more_than_5":
+                    add_observation("User stepping away for extended time to handle notification", "user_response")
+                    message = "Alright, I'll pause the session. Come back when you're ready and I'll get you refocused."
+                    decision = {"action": "speak", "message": message}
+                    await nudge_and_speak(decision)
+                    session_state["notification_pause"] = True
+                    session_state["notification_pause_until"] = time.time() + 600
+                    await broadcast({"type": "notification_pause", "duration": 600})
+                elif mapped in ("its_for_my_task", "i_drifted", "taking_break", "skip_break", "got_it"):
+                    # These are handled by the existing handlers above
+                    # But since we're in elif chain, we need to handle them here too
+                    if mapped == "its_for_my_task":
+                        add_observation("User confirmed: current window is for task", "user_response")
+                        session_state["ever_on_task"] = True
+                        last_unsure_title = session_state.get("last_unsure_window", "")
+                        if last_unsure_title:
+                            classification_cache[last_unsure_title] = {"verdict": "relevant", "confidence": 1.0, "reason": "User confirmed relevant"}
+                        await broadcast({"type": "status", "value": "focused"})
+                    elif mapped == "i_drifted":
+                        add_observation("User confirmed: drifted / pull me back", "user_response")
+                        session_state["drift_count"] = session_state.get("drift_count", 0) + 1
+                        session_state["total_drift_count"] = session_state.get("total_drift_count", 0) + 1
+                        last_unsure_title = session_state.get("last_unsure_window", "")
+                        if last_unsure_title:
+                            classification_cache[last_unsure_title] = {"verdict": "drift", "confidence": 1.0, "reason": "User confirmed drift"}
+                        await broadcast({"type": "status", "value": "drifted"})
+                        task = session_state.get("task", "your task")
+                        message = f"No worries! Let's get back to {task}."
+                        await nudge_and_speak({"action": "speak", "message": message})
+                    elif mapped == "got_it":
+                        await broadcast({"type": "status", "value": "focused"})
 
             elif action == "user_speech":
                 user_text = data.get("text", "").strip()
@@ -1190,6 +1554,21 @@ async def monitoring_loop():
         # During breaks, still monitor but don't nudge for drifts (they're on break)
         # If they skip break via button, break_active will be set to False
 
+        # Check if notification pause expired -- nudge them back
+        if session_state.get("notification_pause"):
+            pause_until = session_state.get("notification_pause_until", 0)
+            if time.time() >= pause_until:
+                session_state["notification_pause"] = False
+                task = session_state.get("task", "your task")
+                message = f"Hey! Ready to get back to {task}?"
+                decision = {"action": "speak", "message": message, "options": ["I'm back"]}
+                await nudge_and_speak(decision)
+                add_observation("Notification pause ended, nudged user back", "notification_return")
+            else:
+                # Still in pause -- skip monitoring
+                await asyncio.sleep(5)
+                continue
+
         # If waiting for user response to "is this for your task?"
         if session_state.get("waiting_for_response"):
             # If window changed or 15s passed, clear waiting -- don't keep asking
@@ -1275,8 +1654,14 @@ async def monitoring_loop():
                 add_observation(f"Window: {title} --> drift ({confidence:.0%}). Reason: {reason}.")
                 print(f"  [MONITOR] [{elapsed}m] DRIFT: {title[:60]}", flush=True)
 
-                # Don't nudge during breaks
+                # During breaks, remind user they're on break instead of silently ignoring
                 if session_state.get("break_active"):
+                    break_elapsed = time.time() - session_state.get("break_start", time.time())
+                    # Remind every 60s during break that they should be resting, not browsing
+                    last_break_reminder = session_state.get("last_break_reminder", 0)
+                    if time.time() - last_break_reminder > 60 and break_elapsed < 300:
+                        session_state["last_break_reminder"] = time.time()
+                        show_native_overlay("You're on a break! Step away from the screen — stretch, grab water, move around.", ["I'm back, let's go"])
                     last_title = title
                     continue
 
@@ -1294,10 +1679,16 @@ async def monitoring_loop():
                     drift_count = session_state["drift_count"]
                     task = session_state.get("task", "your task")
                     # Extract meaningful site/content name from title
-                    # "Google Chrome - YouTube - Google Chrome - User" -> "YouTube"
-                    # "Google Chrome - Reddit - Google Chrome" -> "Reddit"
-                    parts = [p.strip() for p in title.split(" - ") if p.strip().lower() not in ("google chrome", "mozilla firefox", "safari", "microsoft edge")]
-                    window_short = parts[0][:40] if parts else title.split(" - ")[0].strip()[:40]
+                    # Extract meaningful site/page name from window title
+                    import re
+                    skip_parts = {"google chrome", "mozilla firefox", "safari", "microsoft edge", "electron"}
+                    parts = [p.strip() for p in title.split(" - ") if p.strip().lower() not in skip_parts and len(p.strip()) > 2]
+                    cleaned = []
+                    for p in parts:
+                        p = re.sub(r'^\(\d+\)\s*', '', p).strip()
+                        if len(p) > 2:
+                            cleaned.append(p)
+                    window_short = cleaned[0][:40] if cleaned else title[:40]
 
                     if drift_count >= 3:
                         break_messages = [
@@ -1340,13 +1731,40 @@ async def monitoring_loop():
                 add_observation(f"Window: {title} --> unsure ({confidence:.0%}). Reason: {reason}.")
                 print(f"  [MONITOR] [{elapsed}m] UNSURE: {title[:60]}")
 
-                # Don't ask about Anchor app or empty windows (marked with is_anchor flag)
+                # Don't ask about Anchor app or empty windows
                 is_silent_unsure = result.get("is_anchor", False)
-                parts = [p.strip() for p in title.split(" - ") if p.strip().lower() not in ("google chrome", "mozilla firefox", "safari", "microsoft edge", "electron", "")]
+                import re as _re
+                skip_set = {"google chrome", "mozilla firefox", "safari", "microsoft edge", "electron", "new tab", ""}
+                parts = [_re.sub(r'^\(\d+\)\s*', '', p).strip() for p in title.split(" - ")]
+                parts = [p for p in parts if p.lower() not in skip_set and len(p) > 2]
                 app_name = parts[0][:40] if parts else ""
-                is_empty = not app_name or app_name.lower() in ("new tab", "missing value", "unknown", "")
+                is_empty = not app_name
 
-                if not is_empty and not is_silent_unsure and not session_state.get("break_active") and not session_state.get("waiting_for_response"):
+                # Check if this is a messaging/calling app (WhatsApp, iMessage, Slack, etc.)
+                messaging_apps = {"whatsapp", "imessage", "messages", "telegram", "discord",
+                                  "facebook messenger", "messenger", "slack", "signal",
+                                  "facetime", "zoom", "teams", "google meet", "webex"}
+                is_messaging = any(app in title.lower() for app in messaging_apps)
+
+                if is_messaging and not session_state.get("break_active") and not session_state.get("waiting_for_response"):
+                    # Check if user was expecting notifications from this app
+                    expected = session_state.get("expected_notifications", "").lower()
+                    if expected and any(app in expected for app in messaging_apps if app in title.lower()):
+                        # This matches what they said they're expecting -- stay silent
+                        print(f"  [MONITOR] Expected notification from {app_name}, staying silent")
+                        is_silent_unsure = True
+                    else:
+                        # Not expected -- gently ask if it's important
+                        session_state["last_unsure_window"] = title
+                        message = f"I see you're on {app_name}. Is this something important, or do you want to get back to it later?"
+                        print(f"  [MONITOR] Unexpected messaging app: {app_name}")
+                        decision = {"action": "ask", "message": message, "options": ["It's important, let me check", "I'll get back to it later"]}
+                        await nudge_and_speak(decision, {"drift_count": session_state["drift_count"]}, context_window=title)
+                        session_state["waiting_for_response"] = True
+                        session_state["waiting_since"] = time.time()
+                        is_silent_unsure = True  # Don't also trigger the generic unsure flow below
+
+                if not is_empty and not is_silent_unsure and not is_messaging and not session_state.get("break_active") and not session_state.get("waiting_for_response"):
                     session_state["last_unsure_window"] = title
                     task = session_state.get("task", "your task")
                     message = f"I see you're on {app_name}. Is this for {task}, or did you drift?"
@@ -1643,6 +2061,20 @@ async def stop_camera_endpoint():
 
 
 # ============================================================
+# DND ENDPOINTS
+# ============================================================
+@app.post("/dnd/enable")
+async def enable_dnd_endpoint():
+    success = enable_dnd_macos()
+    return {"status": "enabled" if success else "failed", "method": "auto"}
+
+@app.post("/dnd/disable")
+async def disable_dnd_endpoint():
+    success = disable_dnd_macos()
+    return {"status": "disabled" if success else "failed", "method": "auto"}
+
+
+# ============================================================
 # REST ENDPOINTS
 # ============================================================
 @app.get("/")
@@ -1806,12 +2238,17 @@ async def end_session():
         return {"error": "No active session"}
 
     session_active = False
+    kill_overlay()  # Clean up any stale overlay
     if monitoring_task:
         monitoring_task.cancel()
         try:
             await monitoring_task
         except asyncio.CancelledError:
             pass
+
+    # Auto-disable DND if it was enabled for this session
+    if session_state.get("dnd_enabled"):
+        threading.Thread(target=disable_dnd_macos, daemon=True).start()
 
     summary = build_session_summary()
     print(f"\n[SESSION] Ended. Focus: {summary['focused_time_min']}min, Drifts: {summary['drift_count']}")

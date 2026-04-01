@@ -7,11 +7,14 @@ type SmiskiState = "hidden" | "present" | "menu";
 interface Props {
   nudgeText?: string;
   nudgeId?: number;
+  nudgeType?: string;
+  nudgeOptions?: string[];
   noteEvent?: { text: string; id: number } | null;
   buddyPromptEvent?: { id: number } | null;
   buddyAckEvent?: { text: string; id: number } | null;
   onTakeBreak: () => void;
   onPullBack: () => void;
+  onOptionSelect?: (option: string) => void;
   onEndSession: () => void;
   sessionActive: boolean;
   suppressMountGreeting?: boolean;
@@ -163,11 +166,14 @@ function generateAckFromReply(reply: string): string {
 const SmiskiCompanion = ({
   nudgeText,
   nudgeId,
+  nudgeType,
+  nudgeOptions,
   noteEvent,
   buddyPromptEvent,
   buddyAckEvent,
   onTakeBreak,
   onPullBack,
+  onOptionSelect,
   onEndSession,
   sessionActive,
   suppressMountGreeting = false,
@@ -546,20 +552,39 @@ const SmiskiCompanion = ({
                 transition={{ delay: 0.1, duration: 0.2 }}
                 className="pointer-events-auto flex flex-col gap-1.5"
               >
-                {hasDrifted.current && (
-                  <button
-                    onClick={handleTakeBreak}
-                    className="rounded-xl bg-card border border-border px-3 py-2 text-xs font-medium text-foreground hover:bg-secondary transition-colors shadow-sm text-left"
-                  >
-                    Take a break
-                  </button>
+                {nudgeType === "ask" && nudgeOptions && nudgeOptions.length > 0 && onOptionSelect ? (
+                  /* Dynamic options for ask-type nudges (notifications, time estimates, etc.) */
+                  nudgeOptions.map((option, idx) => (
+                    <button
+                      key={option}
+                      onClick={() => { if (alertExitTimer.current) clearTimeout(alertExitTimer.current); onOptionSelect(option); walkOut(); }}
+                      className={idx === 0
+                        ? "btn-primary-action rounded-xl px-3 py-2 text-xs font-semibold shadow-sm"
+                        : "rounded-xl bg-card border border-border px-3 py-2 text-xs font-medium text-foreground hover:bg-secondary transition-colors shadow-sm text-left"
+                      }
+                    >
+                      {option}
+                    </button>
+                  ))
+                ) : (
+                  /* Default drift/break buttons */
+                  <>
+                    {hasDrifted.current && (
+                      <button
+                        onClick={handleTakeBreak}
+                        className="rounded-xl bg-card border border-border px-3 py-2 text-xs font-medium text-foreground hover:bg-secondary transition-colors shadow-sm text-left"
+                      >
+                        Take a break
+                      </button>
+                    )}
+                    <button
+                      onClick={hasDrifted.current ? handlePullBack : () => { walkOut(); }}
+                      className="btn-primary-action rounded-xl px-3 py-2 text-xs font-semibold shadow-sm"
+                    >
+                      {hasDrifted.current ? "Pull me back" : "Let's go!"}
+                    </button>
+                  </>
                 )}
-                <button
-                  onClick={hasDrifted.current ? handlePullBack : () => { walkOut(); }}
-                  className="btn-primary-action rounded-xl px-3 py-2 text-xs font-semibold shadow-sm"
-                >
-                  {hasDrifted.current ? "Pull me back" : "Let's go!"}
-                </button>
               </motion.div>
             )}
           </AnimatePresence>

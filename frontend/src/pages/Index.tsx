@@ -27,7 +27,7 @@ const Index = () => {
   const [isPaused, setIsPaused] = useState(false);
   const [focusStatus, setFocusStatus] = useState<FocusStatus>("focused");
   const [nudge, setNudge] = useState<NudgeType>("none");
-  const [activeNudge, setActiveNudge] = useState<{ text: string; id: number; nudgeType?: string } | null>(null);
+  const [activeNudge, setActiveNudge] = useState<{ text: string; id: number; nudgeType?: string; options?: string[] } | null>(null);
   const nudgeCounter = useRef(0);
   const [driftCount, setDriftCount] = useState(0);
   const [driftTriggers, setDriftTriggers] = useState<string[]>([]);
@@ -229,7 +229,7 @@ const Index = () => {
             }
             nudgeCounter.current += 1;
             const msg = data.message || "Hey, you drifted. Break or get back?";
-            setActiveNudge({ text: msg, id: nudgeCounter.current, nudgeType: data.nudge_type });
+            setActiveNudge({ text: msg, id: nudgeCounter.current, nudgeType: data.nudge_type, options: data.options });
             addLog("nudge", "\u{1F5E3}\uFE0F", `Anchor: "${msg}"`);
           } else if (data.type === "status") {
             setFocusStatus(data.value);
@@ -438,11 +438,20 @@ const Index = () => {
         nudgeText={activeNudge?.text}
         nudgeId={activeNudge?.id}
         nudgeType={activeNudge?.nudgeType}
+        nudgeOptions={activeNudge?.options}
         noteEvent={noteEvent}
         buddyPromptEvent={buddyPromptEvent}
         buddyAckEvent={buddyAckEvent}
         onTakeBreak={handleTakeBreak}
         onPullBack={handlePullBack}
+        onOptionSelect={(option: string) => {
+          setNudge("none");
+          setActiveNudge(null);
+          addLog("response", "\u{1F464}", `User clicked: ${option}`);
+          if (wsRef.current?.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({ action: "option_select", option }));
+          }
+        }}
         onEndSession={handleEndSession}
         sessionActive={screen === "focusing"}
         suppressMountGreeting={screen === "welcome"}
