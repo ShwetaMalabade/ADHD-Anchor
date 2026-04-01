@@ -32,3 +32,7 @@ That ADHD is not a willpower problem and building for it requires a completely d
 
 ## What's next for Anchor
 We want to add Google Calendar integration so Anchor knows when your deadlines are and adjusts how hard it nudges you. We are building a mood check-in at the start of each session so Smiski adapts its tone to how you are actually feeling that day. A parent and coach dashboard is on the roadmap for younger users so they can share session summaries with someone who supports them without any privacy concerns. The bigger vision is a focus layer that learns your personal drift patterns over time and gets ahead of them before they even happen.
+
+## License
+This project was originally built at YHack (March 28-29, 2025) by Antara Thapliyal, Shweta Malabade, Dharm Patel and Devanshu
+Licensed under the MIT License. See LICENSE for details.
