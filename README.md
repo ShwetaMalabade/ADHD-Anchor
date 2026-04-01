@@ -33,6 +33,111 @@ That ADHD is not a willpower problem and building for it requires a completely d
 ## What's next for Anchor
 We want to add Google Calendar integration so Anchor knows when your deadlines are and adjusts how hard it nudges you. We are building a mood check-in at the start of each session so Smiski adapts its tone to how you are actually feeling that day. A parent and coach dashboard is on the roadmap for younger users so they can share session summaries with someone who supports them without any privacy concerns. The bigger vision is a focus layer that learns your personal drift patterns over time and gets ahead of them before they even happen.
 
+## Setup & Installation
+
+### Prerequisites
+
+**macOS** (required for window monitoring, DND control, calendar integration)
+
+**System dependencies** (install via Homebrew):
+```bash
+# Install Homebrew if you don't have it
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# Required
+brew install python@3.11
+brew install node
+brew install ffmpeg
+
+# Optional (for better audio)
+brew install mpv
+```
+
+**macOS Permissions** (System Settings > Privacy & Security):
+- **Accessibility** — required for reading active window titles
+- **Camera** — required for activity monitor (phone detection, idle detection)
+- **Microphone** — required for voice commands ("Hey Buddy")
+- **Automation > Terminal / your IDE** — required for AppleScript (DND toggle, calendar)
+
+### API Keys
+
+Create a `.env` file in the project root:
+```bash
+# Required
+GEMINI_API_KEY=your_gemini_api_key        # Get from https://aistudio.google.com/apikey
+ELEVENLABS_API_KEY=your_elevenlabs_key    # Get from https://elevenlabs.io/app/settings/api-keys
+
+# Optional (enables web search for ADHD strategies)
+TAVILY_API_KEY=your_tavily_key            # Get from https://tavily.com
+```
+
+### Backend Setup
+
+```bash
+# Clone the repo
+git clone https://github.com/ShwetaMalabade/ADHD-Anchor.git
+cd ADHD-Anchor
+
+# Create virtual environment (recommended)
+python3 -m venv venv
+source venv/bin/activate
+
+# Install Python dependencies
+pip install -r requirements.txt
+
+# Start the backend server
+python server.py
+# Backend runs at http://localhost:8000
+```
+
+### Frontend Setup
+
+```bash
+# In a new terminal
+cd frontend
+
+# Install dependencies
+npm install
+
+# Start the dev server
+npm run dev
+# Frontend runs at http://localhost:8080
+```
+
+### Chrome Extension (Optional)
+
+1. Open Chrome > `chrome://extensions/`
+2. Enable **Developer mode** (top right)
+3. Click **Load unpacked**
+4. Select the `chrome-extension/` folder
+
+### Running the App
+
+1. Start the backend: `python server.py`
+2. Start the frontend: `cd frontend && npm run dev`
+3. Open http://localhost:8080 in Chrome
+4. Enter your task, set duration, and start focusing!
+
+### Voice Commands
+
+During a session, speak naturally to your buddy:
+- "Hey buddy, add a reminder for my meeting tomorrow at 3pm" — adds to your macOS Calendar
+- "I need a break" — starts a break
+- "What should I do next?" — gets task chunking help
+
+### Features
+
+| Feature | How it works |
+|---|---|
+| Window monitoring | Reads active window title, classifies relevance via Gemini |
+| Native overlay | Floating nudge window on top of ALL apps (even with DND on) |
+| DND toggle | Automatically enables/disables macOS Focus mode |
+| Calendar | Add events via voice to macOS Calendar (syncs with Google/Outlook) |
+| Voice | ElevenLabs TTS for nudges, STT for voice commands |
+| Activity detection | MediaPipe webcam analysis (phone use, idle, attention) |
+| Drift learning | HMM + SuperMemory builds your personal drift profile |
+| Chrome extension | Smiski companion appears in every browser tab |
+
 ## License
 This project was originally built at YHack (March 28-29, 2025) by Antara Thapliyal, Shweta Malabade, Dharm Patel and Devanshu
 Licensed under the MIT License. See LICENSE for details.

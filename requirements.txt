@@ -15,3 +15,6 @@ langchain-community==0.4.1
 langchain-core==1.2.23
 tavily-python==0.7.23
 websockets==16.0
+pyobjc-core==12.1
+pyobjc-framework-Cocoa==12.1
+pyobjc-framework-Quartz==12.1
