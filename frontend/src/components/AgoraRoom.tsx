@@ -13,9 +13,10 @@ const BACKEND_WS = "ws://localhost:8000/ws-audio";
 
 interface AgoraRoomProps {
   onUserSpeech?: (transcript: string) => void;
+  anchorSpeaking?: boolean;
 }
 
-const AgoraRoom = ({ onUserSpeech }: AgoraRoomProps) => {
+const AgoraRoom = ({ onUserSpeech, anchorSpeaking = false }: AgoraRoomProps) => {
   const [joined, setJoined] = useState(false);
   const [micOn, setMicOn] = useState(false);
   const [transcript, setTranscript] = useState("");
@@ -208,10 +209,24 @@ const AgoraRoom = ({ onUserSpeech }: AgoraRoomProps) => {
     }
   }, [micOn, stopRecording, startRecording]);
 
-  // Cleanup on unmount
+  // Auto-join voice channel when component mounts (session starts)
   useEffect(() => {
+    if (!joined) {
+      joinChannel();
+    }
     return () => { leaveChannel(); };
-  }, [leaveChannel]);
+  }, []);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Pause mic recording while Anchor is speaking (prevents feedback loop)
+  useEffect(() => {
+    if (anchorSpeaking && micOn) {
+      console.log("[AUDIO] Pausing mic -- Anchor is speaking");
+      stopRecording();
+    } else if (!anchorSpeaking && micOn && joined) {
+      console.log("[AUDIO] Resuming mic -- Anchor done speaking");
+      setTimeout(() => startRecording(), 500);
+    }
+  }, [anchorSpeaking]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <motion.div

@@ -30,6 +30,7 @@ const Index = () => {
   const [activeNudge, setActiveNudge] = useState<{ text: string; id: number; nudgeType?: string; options?: string[] } | null>(null);
   const nudgeCounter = useRef(0);
   const [driftCount, setDriftCount] = useState(0);
+  const [anchorSpeaking, setAnchorSpeaking] = useState(false);
   const [driftTriggers, setDriftTriggers] = useState<string[]>([]);
   const [timeline, setTimeline] = useState<{ minute: number; focused: boolean; type?: "focus" | "drift" | "break" }[]>([]);
   const [longestStreak, setLongestStreak] = useState(0);
@@ -246,6 +247,8 @@ const Index = () => {
               const appName = (data.window || "").split(" - ")[0].trim() || "Unknown";
               setDriftTriggers((prev) => [...prev, appName]);
             }
+          } else if (data.type === "anchor_speaking") {
+            setAnchorSpeaking(data.speaking);
           } else if (data.type === "break_started") {
             setNudge("none");
             setActiveNudge(null);
@@ -471,7 +474,7 @@ const Index = () => {
 
         {screen === "focusing" && (
           <div key="focusing" className="min-h-screen">
-            <AgoraRoom onUserSpeech={handleUserSpeech} />
+            <AgoraRoom onUserSpeech={handleUserSpeech} anchorSpeaking={anchorSpeaking} />
             <FocusWidget
               task={task}
               status={focusStatus}

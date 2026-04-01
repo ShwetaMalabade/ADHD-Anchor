@@ -195,6 +195,12 @@ print("[PYNPUT] Keyboard and mouse listeners started.")
 # INITIALIZE
 # ============================================================
 app = FastAPI(title="Anchor Backend")
+_main_event_loop = None
+
+@app.on_event("startup")
+async def _capture_loop():
+    global _main_event_loop
+    _main_event_loop = asyncio.get_event_loop()
 
 # Allow React frontend (localhost:3000) to talk to this server
 app.add_middleware(
@@ -765,6 +771,12 @@ async def speak(message: str, context_window: str = None):
     def _generate_and_play():
         global current_voice_process, voice_busy
         try:
+            # Tell frontend to mute mic while we speak (prevents feedback loop)
+            import asyncio
+            loop = _main_event_loop
+            if loop:
+                asyncio.run_coroutine_threadsafe(broadcast({"type": "anchor_speaking", "speaking": True}), loop)
+
             print(f'\nSpeaking: "{message}"', flush=True)
             audio = elevenlabs_client.text_to_speech.convert(
                 text=message, voice_id=VOICE_ID,
@@ -784,6 +796,9 @@ async def speak(message: str, context_window: str = None):
         finally:
             current_voice_process = None
             voice_busy = False
+            # Tell frontend to unmute mic
+            if loop:
+                asyncio.run_coroutine_threadsafe(broadcast({"type": "anchor_speaking", "speaking": False}), loop)
 
     threading.Thread(target=_generate_and_play, daemon=True).start()
 
@@ -936,18 +951,30 @@ print("[AGENT] LangChain agent with 7 tools created.")
 
 def speak_sync(message: str):
     """Synchronous voice for use inside LangChain tools (which are sync).
-    Plays audio in a background thread so it doesn't block the monitoring loop."""
+    Plays audio in a background thread so it doesn't block the monitoring loop.
+    Mutes frontend mic while speaking to prevent feedback loop."""
+    global voice_busy
+    if voice_busy:
+        print(f"  [TOOL: speak] Dropped (already speaking): {message[:40]}...", flush=True)
+        return
     try:
+        voice_busy = True
         print(f'\n  [TOOL: speak] "{message}"', flush=True)
+
+        # Tell frontend to mute mic
+        import asyncio
+        loop = _main_event_loop
+        if loop:
+            asyncio.run_coroutine_threadsafe(broadcast({"type": "anchor_speaking", "speaking": True}), loop)
+
         audio = elevenlabs_client.text_to_speech.convert(
             text=message, voice_id=VOICE_ID,
             model_id="eleven_multilingual_v2", output_format="mp3_44100_128",
         )
-        # Consume the generator into bytes so we can pass to thread
         audio_bytes = b"".join(audio)
-        # Play in background thread so monitoring loop isn't blocked
         import threading
         def _play():
+            global voice_busy
             try:
                 import subprocess
                 import tempfile
@@ -958,11 +985,19 @@ def speak_sync(message: str):
                 print("  [TOOL: speak] Done.", flush=True)
             except Exception as e:
                 print(f"  [VOICE PLAY ERROR] {repr(e)}", flush=True)
+            finally:
+                voice_busy = False
+                # Tell frontend to unmute mic
+                if loop:
+                    asyncio.run_coroutine_threadsafe(broadcast({"type": "anchor_speaking", "speaking": False}), loop)
         threading.Thread(target=_play, daemon=True).start()
     except Exception as e:
         import traceback
+        voice_busy = False
         print(f"  [VOICE ERROR] {repr(e)}", flush=True)
         traceback.print_exc()
+        if _main_event_loop:
+            asyncio.run_coroutine_threadsafe(broadcast({"type": "anchor_speaking", "speaking": False}), _main_event_loop)
 
 
 # ============================================================
@@ -1168,7 +1203,7 @@ def show_native_overlay(message: str, options: list = None):
                 # Process the selection using the fuzzy intent matcher
                 # and broadcast to frontend via the event loop
                 import asyncio
-                loop = asyncio.get_event_loop()
+                loop = _main_event_loop or asyncio.get_event_loop()
 
                 async def _handle_overlay_selection():
                     # Simulate a WebSocket option_select action
@@ -1461,6 +1496,28 @@ async def audio_websocket(websocket: WebSocket):
     await websocket.accept()
     print("[AUDIO-WS] Client connected for STT")
 
+    # Debounce: accumulate transcriptions, only send to agent after silence
+    pending_text = []
+    last_speech_time = 0
+    debounce_task = None
+    SPEECH_DEBOUNCE = 10  # Wait 10 seconds of silence before sending to agent
+
+    async def _flush_speech():
+        """Send accumulated speech to the agent after debounce period"""
+        nonlocal pending_text
+        await asyncio.sleep(SPEECH_DEBOUNCE)
+        if pending_text:
+            full_text = " ".join(pending_text)
+            pending_text = []
+            print(f'  [STT] Debounced full speech: "{full_text}"')
+            if session_active:
+                add_observation(f'User said via voice: "{full_text}"', "user_voice")
+                event_summary = f'User spoke via voice: "{full_text}". Respond to what they said in context of the session. Today is {datetime.now().strftime("%Y-%m-%d")}.'
+                decision = await anchor_agent_decide_async(event_summary)
+                if decision["action"] != "stay_silent":
+                    print(f'  [AGENT] Responding to voice: {decision["message"]}')
+                    await nudge_and_speak(decision)
+
     try:
         while True:
             # Receive binary audio data from frontend
@@ -1471,7 +1528,6 @@ async def audio_websocket(websocket: WebSocket):
             print(f"  [AUDIO-WS] Received {len(data)} bytes, sending to ElevenLabs STT...")
 
             try:
-                # Send to ElevenLabs STT (file must be a tuple: filename, bytes, mimetype)
                 import io
                 audio_file = ("audio.webm", io.BytesIO(data), "audio/webm")
                 result = await asyncio.to_thread(
@@ -1483,19 +1539,34 @@ async def audio_websocket(websocket: WebSocket):
                 text = result.text.strip() if hasattr(result, 'text') else str(result).strip()
 
                 if text and len(text) > 1:
-                    print(f'  [STT] Transcribed: "{text}"')
+                    # Filter background noise -- ignore very short, repetitive, or nonsensical transcriptions
+                    words = text.split()
+                    is_noise = (
+                        len(words) <= 2 and len(text) < 10  # Too short to be real speech
+                        or text.lower() in {"you", "the", "a", "i", "um", "uh", "hmm", "oh", "ah", "yeah", "ok", "okay", "so", "and", "but", "like"}
+                        or all(c in ".-,!? " for c in text)  # Just punctuation
+                        or text.count(text.split()[0]) == len(words) and len(words) > 1  # Repeated same word
+                    )
+                    if is_noise:
+                        print(f'  [STT] Filtered noise: "{text}"')
+                        continue
 
-                    # Send transcription back to frontend
+                    print(f'  [STT] Transcribed chunk: "{text}"')
+
+                    # Stop Anchor's voice immediately -- user wants to talk
+                    stop_speaking()
+
+                    # Send transcription back to frontend for display
                     await websocket.send_json({"type": "transcription", "text": text})
 
-                    # Also process as user speech if session is active
-                    if session_active:
-                        add_observation(f'User said via voice: "{text}"', "user_voice")
-                        event_summary = f'User spoke via voice: "{text}". Respond to what they said in context of the session.'
-                        decision = await anchor_agent_decide_async(event_summary)
-                        if decision["action"] != "stay_silent":
-                            print(f'  [AGENT] Responding to voice: {decision["message"]}')
-                            await nudge_and_speak(decision)
+                    # Accumulate and debounce -- wait for user to finish speaking
+                    pending_text.append(text)
+                    last_speech_time = time.time()
+
+                    # Cancel previous debounce timer and start a new one
+                    if debounce_task and not debounce_task.done():
+                        debounce_task.cancel()
+                    debounce_task = asyncio.create_task(_flush_speech())
                 else:
                     print("  [STT] No speech detected in chunk")
 
@@ -1840,7 +1911,9 @@ async def monitoring_loop():
                 await nudge_and_speak(decision, {"nudge_type": "silent_drift"})
                 session_state["idle_nudged"] = True
 
-            if not session_state.get("ever_on_task") and elapsed >= 0.083 and not session_state.get("waiting_for_response"):  # ~5 seconds, skip if waiting for unsure answer
+            # Task initiation nudge -- ONLY when user is still on the Anchor/Agora screen and hasn't started
+            is_on_anchor = "anchor" in title.lower() or "stay focused" in title.lower() or "localhost:8080" in title.lower()
+            if not session_state.get("ever_on_task") and elapsed >= 0.67 and is_on_anchor and not session_state.get("waiting_for_response"):  # ~40 seconds, only on Anchor tab
                 last_initiation_nudge = session_state.get("last_initiation_nudge_time", 0)
                 time_since_last = time.time() - last_initiation_nudge if last_initiation_nudge else 999
 
@@ -1848,22 +1921,12 @@ async def monitoring_loop():
                     nudge_count = session_state.get("initiation_nudge_count", 0)
                     task = session_state.get("task", "your task")
 
-                    # Check if user is on Anchor screen
-                    is_on_anchor = "anchor" in title.lower() or "stay focused" in title.lower()
-
-                    # Short, casual messages -- context-aware, natural phrasing
-                    if is_on_anchor and nudge_count == 0:
-                        first_nudges = [
-                            f"I see you're still here with me. Let's get started -- {task}!",
-                            f"You're on Anchor, great! Time to switch and start {task}.",
-                            f"Ready to go? Let's do this -- {task}!",
-                        ]
-                    else:
-                        first_nudges = [
-                            f"Hey! Time to start {task}.",
-                            f"Let's go -- {task}!",
-                            f"Ready? {task} is waiting for you.",
-                        ]
+                    # Short, casual messages -- user is on Anchor screen, hasn't started yet
+                    first_nudges = [
+                        f"I see you're still here with me. Let's get started -- {task}!",
+                        f"You're on Anchor, great! Time to switch and start {task}.",
+                        f"Ready to go? Let's do this -- {task}!",
+                    ]
                     second_nudges = [
                         f"Still haven't started. Just {task} -- that's all.",
                         f"Starting is the hard part. Just begin.",
